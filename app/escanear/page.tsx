@@ -38,7 +38,6 @@ import {
 } from "@/lib/recent-storage";
 import {
   savePinLocal,
-  getPinLocal,
   hasPinLocal,
 } from "@/lib/pin-storage";
 import { cn } from "@/lib/utils";
@@ -1713,18 +1712,14 @@ function PinEntryStepWrapper({
   onBack: () => void;
   onContinue: (pin: string) => void;
 }) {
-  const savedPin = getPinLocal(tarjeta.id);
-  const hasSaved = savedPin !== null;
-
+  // Por seguridad, el PIN se introduce siempre a mano antes del OCR.
+  // No usamos PIN guardado aquí — solo es accesible via "Ver PIN" en la pantalla de tarjeta.
   const [pin, setPin] = useState("");
-  const [usingSaved, setUsingSaved] = useState(hasSaved);
-
-  const effectivePin = usingSaved ? (savedPin ?? "") : pin;
-  const canContinue = effectivePin.length === 4;
+  const canContinue = pin.length === 4;
 
   function handleContinue() {
     if (!canContinue) return;
-    onContinue(effectivePin);
+    onContinue(pin);
   }
 
   return (
@@ -1758,51 +1753,19 @@ function PinEntryStepWrapper({
         </div>
       </div>
 
-      {usingSaved && savedPin ? (
-        /* ── Saved PIN mode ── */
-        <div className="flex flex-col items-center gap-4 py-4">
-          <p className="text-lg font-bold text-foreground">PIN de la tarjeta</p>
+      <div className="flex flex-col items-center gap-4 py-4">
+        <p className="text-lg font-bold text-foreground">PIN de la tarjeta</p>
+        <p className="text-sm text-muted-foreground text-center">
+          Introduce los 4 dígitos del PIN para continuar.
+        </p>
 
-          <div className="flex items-center gap-3">
-            {Array.from({ length: 4 }).map((_, i) => (
-              <div
-                key={i}
-                className="flex size-14 items-center justify-center rounded-xl border-2 border-primary/40 bg-primary/5"
-              >
-                <div className="size-3 rounded-full bg-primary" />
-              </div>
-            ))}
-          </div>
-
-          <div className="flex items-center gap-1.5 text-sm text-success">
-            <CheckCircle className="size-4" />
-            <span className="font-medium">Usando PIN guardado</span>
-          </div>
-
-          <button
-            type="button"
-            onClick={() => setUsingSaved(false)}
-            className="text-sm font-semibold text-primary underline-offset-2 hover:underline"
-          >
-            Introducir otro PIN
-          </button>
-        </div>
-      ) : (
-        /* ── Manual PIN mode ── */
-        <div className="flex flex-col items-center gap-4 py-4">
-          <p className="text-lg font-bold text-foreground">PIN de la tarjeta</p>
-          <p className="text-sm text-muted-foreground text-center">
-            Introduce los 4 dígitos del PIN para continuar.
-          </p>
-
-          <PinInput
-            value={pin}
-            onChange={setPin}
-            disabled={false}
-            error={false}
-          />
-        </div>
-      )}
+        <PinInput
+          value={pin}
+          onChange={setPin}
+          disabled={false}
+          error={false}
+        />
+      </div>
 
       {/* Actions */}
       <div className="flex gap-3 pt-4">
