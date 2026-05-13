@@ -21,11 +21,11 @@ import {
   Home,
   ChevronLeft,
   CloudUpload,
-  Fingerprint,
   Car,
   Hammer,
   CreditCard,
   ScanLine,
+  Sparkles,
 } from "lucide-react";
 import { toast } from "sonner";
 import { PinInput } from "@/components/shared/pin-input";
@@ -36,11 +36,16 @@ import {
   getLastUsed,
   getRecentItems,
 } from "@/lib/recent-storage";
+import {
+  savePinLocal,
+  getPinLocal,
+  hasPinLocal,
+} from "@/lib/pin-storage";
 import { cn } from "@/lib/utils";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
-type Step = 1 | 2 | 3;
+type Step = 1 | 2 | 3 | 4 | 5;
 type Categoria = "VEHICULO" | "INDUSTRIAL_MAQUINARIA";
 
 interface Vehiculo {
@@ -65,17 +70,17 @@ interface Tarjeta {
   tienePinGuardado: boolean;
 }
 
-interface OcrRawData {
+interface OcrPreviewData {
   estacion?: string;
-  fecha?: string;
-  hora?: string;
+  fechaHora?: string;
+  importeTotal?: number;
   litros?: number;
   precioLitro?: number;
-  importeTotal?: number;
   producto?: string;
+  numRecibo?: string;
   matricula?: string;
   kms?: number;
-  numRecibo?: string;
+  ocrRaw?: string;
 }
 
 interface OcrResponse {
@@ -85,12 +90,25 @@ interface OcrResponse {
   ocrData?: string;
 }
 
-interface Step2State {
+interface AssignState {
   categoria: Categoria;
   vehiculoId: number | null;
   centroCosteId: number | null;
   tarjetaId: number | null;
   kilometros: string;
+}
+
+// Editable OCR data — populated from preview, may be edited by user
+interface EditableOcrData {
+  estacion: string;
+  fechaHora: string;
+  importeTotal: string;
+  litros: string;
+  precioLitro: string;
+  producto: string;
+  numRecibo: string;
+  matricula: string;
+  ocrRaw: string;
 }
 
 // ─── Storage keys ─────────────────────────────────────────────────────────────
@@ -101,23 +119,37 @@ function vehiculoKey(cat: Categoria): string {
 
 const CENTRO_KEY = "centro-coste";
 
-// ─── Formatters ───────────────────────────────────────────────────────────────
+// ─── OCR preview → EditableOcrData conversion ─────────────────────────────────
 
-function formatFechaHora(fecha?: string, hora?: string): string | null {
-  if (!fecha) return null;
-  try {
-    const [y, m, d] = fecha.split("-").map(Number);
-    const dt = new Date(y, m - 1, d);
-    const dateStr = dt.toLocaleDateString("es-ES", {
-      day: "numeric",
-      month: "short",
-      year: "numeric",
-    });
-    return hora ? `${dateStr} · ${hora}` : dateStr;
-  } catch {
-    return fecha;
-  }
+function previewToEditable(data: OcrPreviewData): EditableOcrData {
+  return {
+    estacion: data.estacion ?? "",
+    fechaHora: data.fechaHora ?? "",
+    importeTotal: data.importeTotal != null ? String(data.importeTotal) : "",
+    litros: data.litros != null ? String(data.litros) : "",
+    precioLitro: data.precioLitro != null ? String(data.precioLitro) : "",
+    producto: data.producto ?? "",
+    numRecibo: data.numRecibo ?? "",
+    matricula: data.matricula ?? "",
+    ocrRaw: data.ocrRaw ?? "",
+  };
 }
+
+function emptyEditable(): EditableOcrData {
+  return {
+    estacion: "",
+    fechaHora: "",
+    importeTotal: "",
+    litros: "",
+    precioLitro: "",
+    producto: "",
+    numRecibo: "",
+    matricula: "",
+    ocrRaw: "",
+  };
+}
+
+// ─── Formatters ───────────────────────────────────────────────────────────────
 
 function formatCurrency(value?: number): string | null {
   if (value == null) return null;
@@ -149,16 +181,28 @@ function formatKm(value?: number): string | null {
 
 const STEPS = [
   { key: 1, label: "Captura" },
-  { key: 2, label: "Datos" },
-  { key: 3, label: "PIN" },
+  { key: 2, label: "Preview" },
+  { key: 3, label: "Datos" },
+  { key: 4, label: "PIN" },
 ] as const;
 
+// Map internal step numbers to stepper visual positions (OCR_LOADING = step 3 visual, EditData = step 3, PIN = step 4)
+function stepToVisual(step: Step): number {
+  if (step === 1) return 1;
+  if (step === 2) return 2;
+  if (step === 3) return 3; // OCR_LOADING
+  if (step === 4) return 3; // EDIT_DATA same visual as OCR_LOADING
+  if (step === 5) return 4; // PIN
+  return 1;
+}
+
 function Stepper({ current }: { current: Step }) {
+  const visual = stepToVisual(current);
   return (
     <div className="flex items-center px-6 py-3">
       {STEPS.map((step, idx) => {
-        const active = step.key === current;
-        const done = step.key < current;
+        const active = step.key === visual;
+        const done = step.key < visual;
         return (
           <div key={step.key} className="flex flex-1 items-center">
             <div className="flex flex-col items-center gap-1">
@@ -406,7 +450,73 @@ function CameraStep({
   );
 }
 
-// ─── Vehicle trigger render ───────────────────────────────────────────────────
+// ─── Step 2 — Image Preview ───────────────────────────────────────────────────
+
+function ImagePreviewStep({
+  preview,
+  onBack,
+  onContinue,
+}: {
+  preview: string;
+  onBack: () => void;
+  onContinue: () => void;
+}) {
+  return (
+    <div className="flex flex-1 flex-col overflow-y-auto">
+      <div className="mx-4 mt-4 overflow-hidden rounded-2xl border border-border">
+        <img
+          src={preview}
+          alt="Preview del ticket"
+          className="max-h-64 w-full object-contain bg-black"
+        />
+      </div>
+
+      <div className="flex flex-col gap-3 px-4 py-5">
+        <p className="text-sm text-muted-foreground text-center">
+          Comprueba que el ticket se ve nítido antes de continuar.
+        </p>
+
+        <button
+          onClick={onBack}
+          className="flex h-12 w-full items-center justify-center gap-2 rounded-xl border border-border text-sm font-semibold text-foreground transition-colors hover:bg-muted active:scale-[0.98]"
+        >
+          <RefreshCw className="size-4" />
+          Repetir foto
+        </button>
+
+        <button
+          onClick={onContinue}
+          className="flex h-12 w-full items-center justify-center gap-2 rounded-xl bg-primary text-sm font-bold text-primary-foreground shadow-md shadow-primary/30 transition-all hover:bg-primary/90 active:scale-[0.98]"
+        >
+          Continuar
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// ─── Step 3 — OCR Loading ─────────────────────────────────────────────────────
+
+function OcrLoadingStep() {
+  return (
+    <div className="flex flex-1 flex-col items-center justify-center gap-5 px-8 text-center">
+      <div className="relative flex size-20 items-center justify-center rounded-full bg-primary/10">
+        <Sparkles className="size-8 text-primary animate-pulse" />
+      </div>
+      <div className="flex flex-col gap-1.5">
+        <p className="text-base font-bold text-foreground">
+          Procesando ticket con IA...
+        </p>
+        <p className="text-sm text-muted-foreground">
+          Extrayendo datos del ticket automáticamente
+        </p>
+      </div>
+      <Loader2 className="size-6 animate-spin text-primary" />
+    </div>
+  );
+}
+
+// ─── Vehicle / Centro / Tarjeta trigger + item renders ────────────────────────
 
 function VehiculoTrigger({
   vehiculo,
@@ -515,8 +625,6 @@ function VehiculoItem({
   );
 }
 
-// ─── Centro coste trigger/item renders ───────────────────────────────────────
-
 function CentroTrigger({ centro }: { centro: CentroCoste | null }) {
   if (!centro) {
     return (
@@ -549,8 +657,6 @@ function CentroItem({
     </div>
   );
 }
-
-// ─── Tarjeta trigger/item renders ────────────────────────────────────────────
 
 function TarjetaTrigger({ tarjeta }: { tarjeta: Tarjeta | null }) {
   if (!tarjeta) {
@@ -615,26 +721,75 @@ function TarjetaItem({
   );
 }
 
-// ─── Step 2 — Preview + form ─────────────────────────────────────────────────
+// ─── Field component ─────────────────────────────────────────────────────────
 
-function PreviewStep({
-  preview,
-  state,
-  setState,
+function OcrField({
+  label,
+  value,
+  onChange,
+  type = "text",
+  placeholder,
+  suffix,
+  required,
+}: {
+  label: string;
+  value: string;
+  onChange: (v: string) => void;
+  type?: "text" | "number";
+  placeholder?: string;
+  suffix?: string;
+  required?: boolean;
+}) {
+  return (
+    <div className="flex flex-col gap-1.5">
+      <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+        {label}
+        {required && <span className="ml-0.5 text-destructive">*</span>}
+      </p>
+      <div className="relative">
+        <input
+          type={type}
+          inputMode={type === "number" ? "decimal" : "text"}
+          value={value}
+          onChange={(e) => onChange(e.target.value)}
+          placeholder={placeholder}
+          className={cn(
+            "h-14 w-full rounded-xl border border-primary/25 bg-primary/5 px-4 text-sm text-foreground placeholder:text-muted-foreground outline-none focus:border-primary focus:ring-2 focus:ring-primary/20",
+            suffix && "pr-14",
+          )}
+        />
+        {suffix && (
+          <span className="pointer-events-none absolute right-4 top-1/2 -translate-y-1/2 text-xs font-semibold text-muted-foreground">
+            {suffix}
+          </span>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ─── Step 4 — Edit Data ───────────────────────────────────────────────────────
+
+function EditDataStep({
+  ocrData,
+  setOcrData,
+  assignState,
+  setAssignState,
   onBack,
   onContinue,
 }: {
-  preview: string;
-  state: Step2State;
-  setState: React.Dispatch<React.SetStateAction<Step2State>>;
+  ocrData: EditableOcrData;
+  setOcrData: React.Dispatch<React.SetStateAction<EditableOcrData>>;
+  assignState: AssignState;
+  setAssignState: React.Dispatch<React.SetStateAction<AssignState>>;
   onBack: () => void;
   onContinue: () => void;
 }) {
   const { data: vehiculos = [] } = useQuery<Vehiculo[]>({
-    queryKey: ["vehiculos", state.categoria],
+    queryKey: ["vehiculos", assignState.categoria],
     queryFn: () =>
       apiClient.get<Vehiculo[]>(
-        `/vehiculos?activo=true&categoria=${state.categoria}`,
+        `/vehiculos?activo=true&categoria=${assignState.categoria}`,
       ),
   });
 
@@ -648,255 +803,314 @@ function PreviewStep({
     queryFn: () => apiClient.get<Tarjeta[]>("/tarjetas/mis-tarjetas"),
   });
 
-  // ── Preload last-used from localStorage on mount / categoria change ────────
+  // Preload last-used from localStorage
   useEffect(() => {
     if (vehiculos.length === 0) return;
-    const lastVehiculo = getLastUsed(vehiculoKey(state.categoria), vehiculos);
-    if (lastVehiculo && state.vehiculoId === null) {
-      setState((s) => ({
+    const lastVehiculo = getLastUsed(vehiculoKey(assignState.categoria), vehiculos);
+    if (lastVehiculo && assignState.vehiculoId === null) {
+      setAssignState((s) => ({
         ...s,
         vehiculoId: lastVehiculo.id,
         centroCosteId: lastVehiculo.centroCosteId ?? s.centroCosteId,
       }));
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [vehiculos, state.categoria]);
+  }, [vehiculos, assignState.categoria]);
 
   useEffect(() => {
     if (centros.length === 0) return;
     const lastCentro = getLastUsed(CENTRO_KEY, centros);
-    if (lastCentro && state.centroCosteId === null) {
-      setState((s) => ({ ...s, centroCosteId: lastCentro.id }));
+    if (lastCentro && assignState.centroCosteId === null) {
+      setAssignState((s) => ({ ...s, centroCosteId: lastCentro.id }));
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [centros]);
 
-  // Auto-select single tarjeta
   useEffect(() => {
-    if (tarjetas.length === 1 && state.tarjetaId === null) {
-      setState((s) => ({ ...s, tarjetaId: tarjetas[0].id }));
+    if (tarjetas.length === 1 && assignState.tarjetaId === null) {
+      setAssignState((s) => ({ ...s, tarjetaId: tarjetas[0].id }));
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tarjetas]);
 
-  // ── Derived ───────────────────────────────────────────────────────────────
+  const selectedVehiculo = vehiculos.find((v) => v.id === assignState.vehiculoId) ?? null;
+  const selectedCentro = centros.find((c) => c.id === assignState.centroCosteId) ?? null;
+  const selectedTarjeta = tarjetas.find((t) => t.id === assignState.tarjetaId) ?? null;
 
-  const selectedVehiculo = vehiculos.find((v) => v.id === state.vehiculoId) ?? null;
-  const selectedCentro = centros.find((c) => c.id === state.centroCosteId) ?? null;
-  const selectedTarjeta = tarjetas.find((t) => t.id === state.tarjetaId) ?? null;
-
-  const recentVehiculos = getRecentItems(vehiculoKey(state.categoria), vehiculos, 3);
+  const recentVehiculos = getRecentItems(vehiculoKey(assignState.categoria), vehiculos, 3);
   const recentCentros = getRecentItems(CENTRO_KEY, centros, 3);
 
-  const canContinue = state.vehiculoId !== null && state.tarjetaId !== null;
-
-  // ── Handlers ──────────────────────────────────────────────────────────────
+  const canContinue =
+    assignState.vehiculoId !== null &&
+    assignState.tarjetaId !== null &&
+    ocrData.estacion.trim() !== "" &&
+    ocrData.importeTotal.trim() !== "";
 
   function handleCategoriaChange(c: Categoria) {
-    setState((s) => ({ ...s, categoria: c, vehiculoId: null }));
+    setAssignState((s) => ({ ...s, categoria: c, vehiculoId: null }));
   }
 
-  function handleVehiculoSelect(v: Vehiculo) {
-    setState((s) => ({
-      ...s,
-      vehiculoId: v.id,
-      centroCosteId: v.centroCosteId ?? s.centroCosteId,
-    }));
+  function setField<K extends keyof EditableOcrData>(key: K, val: string) {
+    setOcrData((d) => ({ ...d, [key]: val }));
   }
-
-  function handleCentroSelect(c: CentroCoste) {
-    setState((s) => ({ ...s, centroCosteId: c.id }));
-  }
-
-  function handleTarjetaSelect(t: Tarjeta) {
-    setState((s) => ({ ...s, tarjetaId: t.id }));
-  }
-
-  // ─── Render ───────────────────────────────────────────────────────────────
 
   return (
     <div className="flex flex-1 flex-col overflow-y-auto">
-      {/* Preview */}
-      <div className="mx-4 mt-4 overflow-hidden rounded-2xl border border-border">
-        <img
-          src={preview}
-          alt="Preview del ticket"
-          className="max-h-48 w-full object-contain bg-black"
-        />
-        <div className="flex justify-center border-t border-border bg-card py-2">
-          <button
-            onClick={onBack}
-            className="flex items-center gap-1.5 text-sm font-medium text-primary"
-          >
-            <RefreshCw className="size-3.5" />
-            Repetir foto
-          </button>
-        </div>
-      </div>
-
-      {/* Form */}
       <div className="flex flex-col gap-5 px-4 py-4">
 
-        {/* Tipo de gasto — chip selector */}
-        <div className="flex flex-col gap-2">
-          <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-            Tipo de gasto
-          </p>
-          <div className="grid grid-cols-2 gap-2">
-            <button
-              type="button"
-              onClick={() => handleCategoriaChange("VEHICULO")}
-              className={cn(
-                "flex h-14 items-center justify-center gap-2 rounded-xl border text-sm font-semibold transition-colors",
-                state.categoria === "VEHICULO"
-                  ? "border-primary bg-primary text-primary-foreground shadow-sm shadow-primary/20"
-                  : "border-border bg-card text-foreground hover:bg-muted",
-              )}
-            >
-              <Car className="size-4" />
-              Vehículo
-            </button>
-            <button
-              type="button"
-              onClick={() => handleCategoriaChange("INDUSTRIAL_MAQUINARIA")}
-              className={cn(
-                "flex h-14 items-center justify-center gap-2 rounded-xl border text-sm font-semibold transition-colors",
-                state.categoria === "INDUSTRIAL_MAQUINARIA"
-                  ? "border-primary bg-primary text-primary-foreground shadow-sm shadow-primary/20"
-                  : "border-border bg-card text-foreground hover:bg-muted",
-              )}
-            >
-              <Hammer className="size-4" />
-              Industrial
-            </button>
+        {/* ── Sección OCR ── */}
+        <div className="flex flex-col gap-4 rounded-2xl border border-primary/20 bg-primary/[0.03] p-4">
+          {/* Header badge */}
+          <div className="flex items-center gap-2">
+            <Sparkles className="size-4 text-primary" />
+            <p className="text-xs font-semibold text-primary">
+              Datos extraídos por IA · revisa y edita si es necesario
+            </p>
           </div>
+
+          <OcrField
+            label="Estación"
+            required
+            value={ocrData.estacion}
+            onChange={(v) => setField("estacion", v)}
+            placeholder="Nombre de la estación"
+          />
+
+          <OcrField
+            label="Fecha y hora"
+            value={ocrData.fechaHora}
+            onChange={(v) => setField("fechaHora", v)}
+            type="text"
+            placeholder="2026-01-29T10:05:00"
+          />
+
+          <OcrField
+            label="Importe total"
+            required
+            value={ocrData.importeTotal}
+            onChange={(v) => setField("importeTotal", v)}
+            type="number"
+            placeholder="0.00"
+            suffix="€"
+          />
+
+          <OcrField
+            label="Litros"
+            value={ocrData.litros}
+            onChange={(v) => setField("litros", v)}
+            type="number"
+            placeholder="—"
+            suffix="L"
+          />
+
+          <OcrField
+            label="Precio / L"
+            value={ocrData.precioLitro}
+            onChange={(v) => setField("precioLitro", v)}
+            type="number"
+            placeholder="—"
+            suffix="€/L"
+          />
+
+          <OcrField
+            label="Producto"
+            value={ocrData.producto}
+            onChange={(v) => setField("producto", v)}
+            placeholder="Diésel, Gasolina 95..."
+          />
+
+          <OcrField
+            label="Nº recibo"
+            value={ocrData.numRecibo}
+            onChange={(v) => setField("numRecibo", v)}
+            placeholder="—"
+          />
+
+          <OcrField
+            label="Matrícula detectada"
+            value={ocrData.matricula}
+            onChange={(v) => setField("matricula", v)}
+            placeholder="—"
+          />
         </div>
 
-        {/* Vehículo / Maquinaria — searchable sheet */}
-        <SearchableSheetSelect<Vehiculo>
-          label={state.categoria === "VEHICULO" ? "Vehículo" : "Maquinaria"}
-          required
-          title={
-            state.categoria === "VEHICULO"
-              ? "Selecciona vehículo"
-              : "Selecciona maquinaria"
-          }
-          value={selectedVehiculo}
-          onChange={handleVehiculoSelect}
-          items={vehiculos}
-          emptyMessage={
-            state.categoria === "VEHICULO"
-              ? "No hay vehículos disponibles"
-              : "No hay maquinaria disponible"
-          }
-          searchPlaceholder={
-            state.categoria === "VEHICULO"
-              ? "Buscar por matrícula o descripción..."
-              : "Buscar por código o descripción..."
-          }
-          getKey={(v) => v.id}
-          getSearchText={(v) =>
-            [v.matricula, v.codigoObra, v.nombre].filter(Boolean).join(" ")
-          }
-          recentItems={recentVehiculos}
-          recentLabel="Últimos usados"
-          renderTrigger={(v) => (
-            <VehiculoTrigger vehiculo={v} categoria={state.categoria} />
-          )}
-          renderItem={(v, isSelected) => (
-            <VehiculoItem
-              vehiculo={v}
-              categoria={state.categoria}
-              isSelected={isSelected}
-            />
-          )}
-        />
+        {/* ── Sección Asignación ── */}
+        <div className="flex flex-col gap-4">
+          <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+            Asignación
+          </p>
 
-        {/* Kilómetros — only for vehicles */}
-        {state.categoria === "VEHICULO" && (
-          <div className="flex flex-col gap-1.5">
-            <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-              Kilómetros (opcional)
+          {/* Tipo */}
+          <div className="flex flex-col gap-2">
+            <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+              Tipo de gasto
             </p>
-            <input
-              type="number"
-              value={state.kilometros}
-              onChange={(e) =>
-                setState((s) => ({ ...s, kilometros: e.target.value }))
-              }
-              placeholder="Ej: 45320"
-              inputMode="numeric"
-              className="h-14 rounded-xl border border-border bg-input px-4 text-sm text-foreground placeholder:text-muted-foreground outline-none focus:border-ring focus:ring-2 focus:ring-ring/20"
-            />
-          </div>
-        )}
-
-        {/* Centro de coste — searchable sheet */}
-        <SearchableSheetSelect<CentroCoste>
-          label="Centro de coste"
-          title="Selecciona centro de coste"
-          value={selectedCentro}
-          onChange={handleCentroSelect}
-          items={centros}
-          emptyMessage="No hay centros de coste disponibles"
-          searchPlaceholder="Buscar centro..."
-          getKey={(c) => c.id}
-          getSearchText={(c) => c.nombre}
-          recentItems={recentCentros}
-          recentLabel="Últimos usados"
-          renderTrigger={(c) => <CentroTrigger centro={c} />}
-          renderItem={(c, isSelected) => (
-            <CentroItem centro={c} isSelected={isSelected} />
-          )}
-        />
-
-        {/* Tarjeta — sheet if multiple, inline card if single */}
-        {tarjetas.length === 1 ? (
-          <div className="flex flex-col gap-1.5">
-            <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-              Tarjeta de combustible
-            </p>
-            <div className="flex min-h-[56px] items-center gap-3 rounded-xl border border-primary/40 bg-primary/5 px-4 py-3">
-              <div className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-primary/10">
-                <CreditCard className="size-4 text-primary" />
-              </div>
-              <div className="min-w-0 flex-1">
-                <p className="text-sm font-semibold text-foreground">
-                  {tarjetas[0].alias ??
-                    `Tarjeta ${tarjetas[0].proveedor ?? ""}`}
-                </p>
-                <p className="text-xs tracking-widest text-muted-foreground">
-                  **** {tarjetas[0].numeroTarjetaUltimos4}
-                </p>
-              </div>
-              <CheckCircle className="size-4 shrink-0 text-primary" />
+            <div className="grid grid-cols-2 gap-2">
+              <button
+                type="button"
+                onClick={() => handleCategoriaChange("VEHICULO")}
+                className={cn(
+                  "flex h-14 items-center justify-center gap-2 rounded-xl border text-sm font-semibold transition-colors",
+                  assignState.categoria === "VEHICULO"
+                    ? "border-primary bg-primary text-primary-foreground shadow-sm shadow-primary/20"
+                    : "border-border bg-card text-foreground hover:bg-muted",
+                )}
+              >
+                <Car className="size-4" />
+                Vehículo
+              </button>
+              <button
+                type="button"
+                onClick={() => handleCategoriaChange("INDUSTRIAL_MAQUINARIA")}
+                className={cn(
+                  "flex h-14 items-center justify-center gap-2 rounded-xl border text-sm font-semibold transition-colors",
+                  assignState.categoria === "INDUSTRIAL_MAQUINARIA"
+                    ? "border-primary bg-primary text-primary-foreground shadow-sm shadow-primary/20"
+                    : "border-border bg-card text-foreground hover:bg-muted",
+                )}
+              >
+                <Hammer className="size-4" />
+                Industrial
+              </button>
             </div>
           </div>
-        ) : (
-          <SearchableSheetSelect<Tarjeta>
-            label="Tarjeta de combustible"
+
+          {/* Vehículo */}
+          <SearchableSheetSelect<Vehiculo>
+            label={assignState.categoria === "VEHICULO" ? "Vehículo" : "Maquinaria"}
             required
-            title="Selecciona tarjeta"
-            value={selectedTarjeta}
-            onChange={handleTarjetaSelect}
-            items={tarjetas}
-            emptyMessage="Sin tarjetas asignadas"
-            searchPlaceholder="Buscar tarjeta..."
-            getKey={(t) => t.id}
-            getSearchText={(t) =>
-              [t.alias, t.proveedor, t.numeroTarjetaUltimos4]
-                .filter(Boolean)
-                .join(" ")
+            title={
+              assignState.categoria === "VEHICULO"
+                ? "Selecciona vehículo"
+                : "Selecciona maquinaria"
             }
-            renderTrigger={(t) => <TarjetaTrigger tarjeta={t} />}
-            renderItem={(t, isSelected) => (
-              <TarjetaItem tarjeta={t} isSelected={isSelected} />
+            value={selectedVehiculo}
+            onChange={(v) =>
+              setAssignState((s) => ({
+                ...s,
+                vehiculoId: v.id,
+                centroCosteId: v.centroCosteId ?? s.centroCosteId,
+              }))
+            }
+            items={vehiculos}
+            emptyMessage={
+              assignState.categoria === "VEHICULO"
+                ? "No hay vehículos disponibles"
+                : "No hay maquinaria disponible"
+            }
+            searchPlaceholder={
+              assignState.categoria === "VEHICULO"
+                ? "Buscar por matrícula o descripción..."
+                : "Buscar por código o descripción..."
+            }
+            getKey={(v) => v.id}
+            getSearchText={(v) =>
+              [v.matricula, v.codigoObra, v.nombre].filter(Boolean).join(" ")
+            }
+            recentItems={recentVehiculos}
+            recentLabel="Últimos usados"
+            renderTrigger={(v) => (
+              <VehiculoTrigger vehiculo={v} categoria={assignState.categoria} />
+            )}
+            renderItem={(v, isSelected) => (
+              <VehiculoItem
+                vehiculo={v}
+                categoria={assignState.categoria}
+                isSelected={isSelected}
+              />
             )}
           />
-        )}
 
-        {/* Actions */}
-        <div className="flex gap-3 pt-2">
+          {/* Kilómetros */}
+          {assignState.categoria === "VEHICULO" && (
+            <div className="flex flex-col gap-1.5">
+              <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+                Kilómetros (opcional)
+              </p>
+              <input
+                type="number"
+                value={assignState.kilometros}
+                onChange={(e) =>
+                  setAssignState((s) => ({ ...s, kilometros: e.target.value }))
+                }
+                placeholder="Ej: 45320"
+                inputMode="numeric"
+                className="h-14 rounded-xl border border-border bg-input px-4 text-sm text-foreground placeholder:text-muted-foreground outline-none focus:border-ring focus:ring-2 focus:ring-ring/20"
+              />
+            </div>
+          )}
+
+          {/* Centro de coste */}
+          <SearchableSheetSelect<CentroCoste>
+            label="Centro de coste"
+            title="Selecciona centro de coste"
+            value={selectedCentro}
+            onChange={(c) =>
+              setAssignState((s) => ({ ...s, centroCosteId: c.id }))
+            }
+            items={centros}
+            emptyMessage="No hay centros de coste disponibles"
+            searchPlaceholder="Buscar centro..."
+            getKey={(c) => c.id}
+            getSearchText={(c) => c.nombre}
+            recentItems={recentCentros}
+            recentLabel="Últimos usados"
+            renderTrigger={(c) => <CentroTrigger centro={c} />}
+            renderItem={(c, isSelected) => (
+              <CentroItem centro={c} isSelected={isSelected} />
+            )}
+          />
+
+          {/* Tarjeta */}
+          {tarjetas.length === 1 ? (
+            <div className="flex flex-col gap-1.5">
+              <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+                Tarjeta de combustible
+              </p>
+              <div className="flex min-h-[56px] items-center gap-3 rounded-xl border border-primary/40 bg-primary/5 px-4 py-3">
+                <div className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-primary/10">
+                  <CreditCard className="size-4 text-primary" />
+                </div>
+                <div className="min-w-0 flex-1">
+                  <p className="text-sm font-semibold text-foreground">
+                    {tarjetas[0].alias ??
+                      `Tarjeta ${tarjetas[0].proveedor ?? ""}`}
+                  </p>
+                  <p className="text-xs tracking-widest text-muted-foreground">
+                    **** {tarjetas[0].numeroTarjetaUltimos4}
+                  </p>
+                </div>
+                <CheckCircle className="size-4 shrink-0 text-primary" />
+              </div>
+            </div>
+          ) : (
+            <SearchableSheetSelect<Tarjeta>
+              label="Tarjeta de combustible"
+              required
+              title="Selecciona tarjeta"
+              value={selectedTarjeta}
+              onChange={(t) =>
+                setAssignState((s) => ({ ...s, tarjetaId: t.id }))
+              }
+              items={tarjetas}
+              emptyMessage="Sin tarjetas asignadas"
+              searchPlaceholder="Buscar tarjeta..."
+              getKey={(t) => t.id}
+              getSearchText={(t) =>
+                [t.alias, t.proveedor, t.numeroTarjetaUltimos4]
+                  .filter(Boolean)
+                  .join(" ")
+              }
+              renderTrigger={(t) => <TarjetaTrigger tarjeta={t} />}
+              renderItem={(t, isSelected) => (
+                <TarjetaItem tarjeta={t} isSelected={isSelected} />
+              )}
+            />
+          )}
+        </div>
+
+        {/* Continue */}
+        <div className="flex gap-3 pt-2 pb-4">
           <button
             onClick={onBack}
             className="flex h-12 flex-1 items-center justify-center rounded-xl border border-border text-sm font-semibold text-foreground transition-colors hover:bg-muted active:scale-[0.98]"
@@ -919,25 +1133,42 @@ function PreviewStep({
   );
 }
 
-// ─── Step 3 — PIN + submit ───────────────────────────────────────────────────
+// ─── Step 5 — PIN + submit ────────────────────────────────────────────────────
 
 function PinStep({
   tarjeta,
   onBack,
   onSuccess,
   imageBlob,
-  step2State,
+  assignState,
+  ocrData,
   onSaveRecents,
 }: {
   tarjeta: Tarjeta;
   onBack: () => void;
   onSuccess: (result: OcrResponse) => void;
   imageBlob: Blob;
-  step2State: Step2State;
+  assignState: AssignState;
+  ocrData: EditableOcrData;
   onSaveRecents: () => void;
 }) {
+  const savedPin = getPinLocal(tarjeta.id);
+  const hasSaved = savedPin !== null;
+
   const [pin, setPin] = useState("");
+  const [usingSaved, setUsingSaved] = useState(hasSaved);
+  const [rememberPin, setRememberPin] = useState(false);
   const [pinError, setPinError] = useState<string | null>(null);
+
+  // Mutation to save PIN to backend + sessionStorage
+  const savePinMutation = useMutation<void, Error, string>({
+    mutationFn: async (pinValue: string) => {
+      await apiClient.post(`/tarjetas/${tarjeta.id}/pin`, { pin: pinValue });
+    },
+    onSuccess: (_, pinValue) => {
+      savePinLocal(tarjeta.id, pinValue);
+    },
+  });
 
   const mutation = useMutation<OcrResponse, Error, string>({
     mutationFn: async (pinValue: string) => {
@@ -947,26 +1178,37 @@ function PinStep({
       const params: Record<string, unknown> = {
         tarjetaId: tarjeta.id,
         pin: pinValue,
-        categoriaRecurso: step2State.categoria,
-        vehiculoId: step2State.vehiculoId,
+        categoriaRecurso: assignState.categoria,
+        vehiculoId: assignState.vehiculoId,
+        // OCR fields
+        estacion: ocrData.estacion,
+        fechaHora: ocrData.fechaHora || undefined,
+        importeTotal: ocrData.importeTotal ? Number(ocrData.importeTotal) : undefined,
+        litros: ocrData.litros ? Number(ocrData.litros) : undefined,
+        precioLitro: ocrData.precioLitro ? Number(ocrData.precioLitro) : undefined,
+        producto: ocrData.producto || undefined,
+        numRecibo: ocrData.numRecibo || undefined,
+        matricula: ocrData.matricula || undefined,
+        ocrRaw: ocrData.ocrRaw || undefined,
       };
-      if (step2State.centroCosteId) params.centroCosteId = step2State.centroCosteId;
-      if (step2State.kilometros) params.kilometros = Number(step2State.kilometros);
+      if (assignState.centroCosteId) params.centroCosteId = assignState.centroCosteId;
+      if (assignState.kilometros) params.kilometros = Number(assignState.kilometros);
 
-      // params como Blob con Content-Type application/json para que Spring
-      // (@RequestPart) lo deserialice correctamente. Sin esto llega como
-      // application/octet-stream y devuelve 500.
       const paramsBlob = new Blob([JSON.stringify(params)], {
         type: "application/json",
       });
       formData.append("params", paramsBlob);
       return apiClient.upload<OcrResponse>("/tickets/ocr-validado", formData);
     },
-    onSuccess: (data) => {
+    onSuccess: async (data, pinValue) => {
       if (typeof navigator !== "undefined" && navigator.vibrate) {
         navigator.vibrate(50);
       }
-      // Save recents on successful submission
+      // Save PIN if checkbox was ticked (and wasn't already saved)
+      if (rememberPin && !hasSaved) {
+        savePinLocal(tarjeta.id, pinValue);
+        savePinMutation.mutate(pinValue);
+      }
       onSaveRecents();
       onSuccess(data);
     },
@@ -985,102 +1227,113 @@ function PinStep({
     },
   });
 
-  async function handleSavedPin() {
-    setPinError(null);
-    try {
-      const challenge = crypto.getRandomValues(new Uint8Array(32));
-      await navigator.credentials.get({
-        publicKey: {
-          challenge,
-          userVerification: "required",
-          timeout: 30_000,
-        },
-      });
-      mutation.mutate("__saved__");
-    } catch {
-      toast.info("Verificación cancelada. Introduce el PIN manualmente.");
-    }
-  }
-
   function handleSend() {
     setPinError(null);
-    if (pin.length < 4) {
+    const effectivePin = usingSaved ? (savedPin ?? "") : pin;
+    if (effectivePin.length < 4) {
       setPinError("Introduce los 4 dígitos del PIN");
       return;
     }
-    mutation.mutate(pin);
+    mutation.mutate(effectivePin);
   }
 
   return (
     <div className="flex flex-1 flex-col overflow-y-auto px-4 py-5">
-      {/* Tarjeta info */}
-      <div className="flex flex-col gap-3 rounded-2xl border border-border bg-card p-4 shadow-sm">
-        <div className="flex items-center gap-3">
-          <div className="flex size-11 items-center justify-center rounded-xl bg-primary/10">
-            <span className="text-lg">💳</span>
-          </div>
-          <div>
-            <p className="text-sm font-semibold text-foreground">
-              {tarjeta.alias ?? `Tarjeta ${tarjeta.proveedor ?? ""}`}
-            </p>
-            <p className="text-xs text-muted-foreground tracking-widest">
-              **** {tarjeta.numeroTarjetaUltimos4}
-            </p>
-          </div>
-        </div>
 
-        {tarjeta.tienePinGuardado && (
-          <button
-            onClick={handleSavedPin}
-            disabled={mutation.isPending}
-            className="flex items-center justify-center gap-2 rounded-xl border border-primary/40 bg-primary/10 py-3 text-sm font-semibold text-primary transition-colors hover:bg-primary/20 disabled:opacity-60"
-          >
-            <Fingerprint className="size-4" />
-            Usar PIN guardado
-          </button>
-        )}
+      {/* Card info */}
+      <div className="mb-5 flex items-center gap-3 rounded-2xl border border-border bg-card p-4 shadow-sm">
+        <div className="flex size-11 items-center justify-center rounded-xl bg-primary/10">
+          <CreditCard className="size-5 text-primary" />
+        </div>
+        <div>
+          <p className="text-sm font-semibold text-foreground">
+            {tarjeta.alias ?? `Tarjeta ${tarjeta.proveedor ?? ""}`}
+          </p>
+          <p className="text-xs text-muted-foreground tracking-widest">
+            **** {tarjeta.numeroTarjetaUltimos4}
+          </p>
+        </div>
       </div>
 
-      {tarjeta.tienePinGuardado && (
-        <div className="my-4 flex items-center gap-3">
-          <div className="flex-1 h-px bg-border" />
-          <span className="text-xs text-muted-foreground">
-            o introduce el PIN
-          </span>
-          <div className="flex-1 h-px bg-border" />
+      {usingSaved && savedPin ? (
+        /* ── Saved PIN mode ── */
+        <div className="flex flex-col items-center gap-4 py-4">
+          <p className="text-lg font-bold text-foreground">PIN de la tarjeta</p>
+
+          {/* Dots display — not editable */}
+          <div className="flex items-center gap-3">
+            {Array.from({ length: 4 }).map((_, i) => (
+              <div
+                key={i}
+                className="flex size-14 items-center justify-center rounded-xl border-2 border-primary/40 bg-primary/5"
+              >
+                <div className="size-3 rounded-full bg-primary" />
+              </div>
+            ))}
+          </div>
+
+          <div className="flex items-center gap-1.5 text-sm text-success">
+            <CheckCircle className="size-4" />
+            <span className="font-medium">Usando PIN guardado</span>
+          </div>
+
+          <button
+            type="button"
+            onClick={() => setUsingSaved(false)}
+            className="text-sm font-semibold text-primary underline-offset-2 hover:underline"
+          >
+            Cambiar PIN
+          </button>
+        </div>
+      ) : (
+        /* ── Manual PIN mode ── */
+        <div className="flex flex-col items-center gap-4 py-4">
+          <p className="text-lg font-bold text-foreground">Introduce tu PIN</p>
+          <p className="text-sm text-muted-foreground text-center">
+            Introduce los 4 dígitos para autorizar el ticket.
+          </p>
+
+          <PinInput
+            value={pin}
+            onChange={(v) => {
+              setPin(v);
+              if (pinError) setPinError(null);
+            }}
+            disabled={mutation.isPending}
+            error={!!pinError}
+          />
+
+          {/* Remember PIN checkbox — only if card doesn't have saved PIN */}
+          {!hasSaved && (
+            <label className="flex cursor-pointer items-start gap-2.5 self-stretch rounded-xl border border-border bg-card px-4 py-3">
+              <input
+                type="checkbox"
+                checked={rememberPin}
+                onChange={(e) => setRememberPin(e.target.checked)}
+                className="mt-0.5 size-4 cursor-pointer accent-primary"
+              />
+              <span className="text-sm text-foreground">
+                Recordar este PIN en este dispositivo
+              </span>
+            </label>
+          )}
         </div>
       )}
 
-      <div className="flex flex-col items-center gap-4 py-4">
-        <p className="text-lg font-bold text-foreground">PIN de tarjeta</p>
-        <p className="text-sm text-muted-foreground text-center">
-          Introduce los 4 dígitos para autorizar el ticket.
-        </p>
+      {/* Error */}
+      {pinError && (
+        <div className="flex items-start gap-2 rounded-lg border border-destructive/30 bg-destructive/10 px-3 py-2.5 mb-4">
+          <AlertCircle className="mt-0.5 size-4 shrink-0 text-destructive" />
+          <p className="text-sm text-destructive">{pinError}</p>
+        </div>
+      )}
 
-        <PinInput
-          value={pin}
-          onChange={(v) => {
-            setPin(v);
-            if (pinError) setPinError(null);
-          }}
-          disabled={mutation.isPending}
-          error={!!pinError}
-        />
-
-        {pinError && (
-          <div className="flex w-full items-start gap-2 rounded-lg border border-destructive/30 bg-destructive/10 px-3 py-2.5">
-            <AlertCircle className="mt-0.5 size-4 shrink-0 text-destructive" />
-            <p className="text-sm text-destructive">{pinError}</p>
-          </div>
-        )}
-
-        {mutation.isPending && (
-          <div className="flex items-center gap-2 text-sm text-muted-foreground">
-            <Loader2 className="size-4 animate-spin text-primary" />
-            Enviando ticket...
-          </div>
-        )}
-      </div>
+      {mutation.isPending && (
+        <div className="flex items-center justify-center gap-2 text-sm text-muted-foreground mb-4">
+          <Loader2 className="size-4 animate-spin text-primary" />
+          Enviando ticket...
+        </div>
+      )}
 
       {/* Actions */}
       <div className="flex gap-3 pt-2">
@@ -1093,7 +1346,10 @@ function PinStep({
         </button>
         <button
           onClick={handleSend}
-          disabled={pin.length < 4 || mutation.isPending}
+          disabled={
+            mutation.isPending ||
+            (!usingSaved && pin.length < 4)
+          }
           className={cn(
             "flex h-12 flex-[2] items-center justify-center gap-2 rounded-xl bg-primary text-sm font-bold text-primary-foreground shadow-md shadow-primary/30",
             "transition-all hover:bg-primary/90 active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-50",
@@ -1121,40 +1377,39 @@ interface OcrField {
 function SuccessView({
   result,
   tarjeta,
+  ocrData,
   onHome,
   onScanAnother,
 }: {
   result: OcrResponse;
   tarjeta: Tarjeta | null;
+  ocrData: EditableOcrData;
   onHome: () => void;
   onScanAnother: () => void;
 }) {
-  // Parse ocrData (string JSON)
-  let ocr: OcrRawData | null = null;
-  if (result.ocrData) {
-    try {
-      ocr = JSON.parse(result.ocrData) as OcrRawData;
-    } catch {
-      ocr = null;
-    }
-  }
-
-  const fields: OcrField[] = ocr
-    ? [
-        { label: "Estación", value: ocr.estacion ?? null },
-        {
-          label: "Fecha y hora",
-          value: formatFechaHora(ocr.fecha, ocr.hora),
-        },
-        { label: "Producto", value: ocr.producto ?? null },
-        { label: "Litros", value: formatLitros(ocr.litros) },
-        { label: "Precio/L", value: formatPrecioLitro(ocr.precioLitro) },
-        { label: "Importe", value: formatCurrency(ocr.importeTotal) },
-        { label: "Matrícula", value: ocr.matricula ?? null },
-        { label: "Km", value: formatKm(ocr.kms) },
-        { label: "Nº recibo", value: ocr.numRecibo ?? null },
-      ].filter((f): f is { label: string; value: string } => f.value !== null)
-    : [];
+  const fields: OcrField[] = [
+    { label: "Estación", value: ocrData.estacion || null },
+    { label: "Fecha y hora", value: ocrData.fechaHora || null },
+    { label: "Producto", value: ocrData.producto || null },
+    {
+      label: "Litros",
+      value: ocrData.litros ? formatLitros(Number(ocrData.litros)) : null,
+    },
+    {
+      label: "Precio/L",
+      value: ocrData.precioLitro
+        ? formatPrecioLitro(Number(ocrData.precioLitro))
+        : null,
+    },
+    {
+      label: "Importe",
+      value: ocrData.importeTotal
+        ? formatCurrency(Number(ocrData.importeTotal))
+        : null,
+    },
+    { label: "Matrícula", value: ocrData.matricula || null },
+    { label: "Nº recibo", value: ocrData.numRecibo || null },
+  ].filter((f): f is { label: string; value: string } => f.value !== null);
 
   return (
     <div className="flex flex-1 flex-col overflow-y-auto px-4 py-6">
@@ -1176,7 +1431,7 @@ function SuccessView({
         <div className="mb-4 overflow-hidden rounded-2xl border border-primary/30 bg-card shadow-sm">
           <div className="border-b border-border bg-primary/5 px-4 py-3">
             <p className="text-xs font-semibold uppercase tracking-widest text-primary">
-              Datos extraídos del ticket
+              Datos del ticket
             </p>
           </div>
           <div className="divide-y divide-border">
@@ -1262,7 +1517,9 @@ export default function EscanearPage() {
   const [done, setDone] = useState(false);
   const [ocrResult, setOcrResult] = useState<OcrResponse | null>(null);
 
-  const [step2State, setStep2State] = useState<Step2State>({
+  const [ocrData, setOcrData] = useState<EditableOcrData>(emptyEditable());
+
+  const [assignState, setAssignState] = useState<AssignState>({
     categoria: "VEHICULO",
     vehiculoId: null,
     centroCosteId: null,
@@ -1270,14 +1527,40 @@ export default function EscanearPage() {
     kilometros: "",
   });
 
+  // Fetch tarjetas (needed at step 5 for PinStep)
   const { data: tarjetas = [] } = useQuery<Tarjeta[]>({
     queryKey: ["mis-tarjetas"],
     queryFn: () => apiClient.get<Tarjeta[]>("/tarjetas/mis-tarjetas"),
-    enabled: step === 3,
+    enabled: step >= 4,
   });
 
   const selectedTarjeta =
-    tarjetas.find((t) => t.id === step2State.tarjetaId) ?? null;
+    tarjetas.find((t) => t.id === assignState.tarjetaId) ?? null;
+
+  // ── OCR preview mutation (step 3) ─────────────────────────────────────────
+
+  const ocrPreviewMutation = useMutation<OcrPreviewData, Error, Blob>({
+    mutationFn: async (blob: Blob) => {
+      const formData = new FormData();
+      formData.append("imagen", blob, "ticket.jpg");
+      return apiClient.upload<OcrPreviewData>("/tickets/ocr-preview", formData);
+    },
+    onSuccess: (data) => {
+      setOcrData(previewToEditable(data));
+      setStep(4);
+    },
+    onError: (err) => {
+      toast.error(
+        err instanceof ApiError
+          ? err.message
+          : "Error al procesar el ticket. Inténtalo de nuevo.",
+      );
+      // Go back to image preview so user can retry
+      setStep(2);
+    },
+  });
+
+  // ── Handlers ──────────────────────────────────────────────────────────────
 
   function handleCapture(blob: Blob, previewUrl: string) {
     setImageBlob(blob);
@@ -1285,18 +1568,33 @@ export default function EscanearPage() {
     setStep(2);
   }
 
+  function handlePreviewContinue() {
+    if (!imageBlob) return;
+    setStep(3);
+    ocrPreviewMutation.mutate(imageBlob);
+  }
+
   function handleBack() {
-    if (step === 1) router.back();
-    else if (step === 2) setStep(1);
-    else setStep(2);
+    if (step === 1) {
+      router.back();
+    } else if (step === 2) {
+      setStep(1);
+    } else if (step === 3) {
+      // OCR is loading — cancel and go back to preview
+      setStep(2);
+    } else if (step === 4) {
+      setStep(2); // back to image preview (re-OCR would re-run on continue)
+    } else if (step === 5) {
+      setStep(4);
+    }
   }
 
   function handleSaveRecents() {
-    if (step2State.vehiculoId !== null) {
-      addRecent(vehiculoKey(step2State.categoria), step2State.vehiculoId);
+    if (assignState.vehiculoId !== null) {
+      addRecent(vehiculoKey(assignState.categoria), assignState.vehiculoId);
     }
-    if (step2State.centroCosteId !== null) {
-      addRecent(CENTRO_KEY, step2State.centroCosteId);
+    if (assignState.centroCosteId !== null) {
+      addRecent(CENTRO_KEY, assignState.centroCosteId);
     }
   }
 
@@ -1305,7 +1603,8 @@ export default function EscanearPage() {
     setOcrResult(null);
     setImageBlob(null);
     setPreview("");
-    setStep2State({
+    setOcrData(emptyEditable());
+    setAssignState({
       categoria: "VEHICULO",
       vehiculoId: null,
       centroCosteId: null,
@@ -1314,6 +1613,8 @@ export default function EscanearPage() {
     });
     setStep(1);
   }
+
+  // ── Success view ─────────────────────────────────────────────────────────
 
   if (done && ocrResult) {
     return (
@@ -1327,6 +1628,7 @@ export default function EscanearPage() {
           <SuccessView
             result={ocrResult}
             tarjeta={selectedTarjeta}
+            ocrData={ocrData}
             onHome={() => router.push("/")}
             onScanAnother={handleScanAnother}
           />
@@ -1356,39 +1658,51 @@ export default function EscanearPage() {
         {/* Step content */}
         {step === 1 && <CameraStep onCapture={handleCapture} />}
 
-        {step === 2 && imageBlob && (
-          <PreviewStep
+        {step === 2 && (
+          <ImagePreviewStep
             preview={preview}
-            state={step2State}
-            setState={setStep2State}
             onBack={() => setStep(1)}
-            onContinue={() => setStep(3)}
+            onContinue={handlePreviewContinue}
           />
         )}
 
-        {step === 3 && imageBlob && selectedTarjeta && (
+        {step === 3 && <OcrLoadingStep />}
+
+        {step === 4 && (
+          <EditDataStep
+            ocrData={ocrData}
+            setOcrData={setOcrData}
+            assignState={assignState}
+            setAssignState={setAssignState}
+            onBack={() => setStep(2)}
+            onContinue={() => setStep(5)}
+          />
+        )}
+
+        {step === 5 && imageBlob && selectedTarjeta && (
           <PinStep
             tarjeta={selectedTarjeta}
-            onBack={() => setStep(2)}
+            onBack={() => setStep(4)}
             onSuccess={(result) => {
               setOcrResult(result);
               setDone(true);
             }}
             imageBlob={imageBlob}
-            step2State={step2State}
+            assignState={assignState}
+            ocrData={ocrData}
             onSaveRecents={handleSaveRecents}
           />
         )}
 
-        {/* Fallback if tarjeta not found at step 3 */}
-        {step === 3 && !selectedTarjeta && (
+        {/* Fallback: tarjeta not found at step 5 */}
+        {step === 5 && !selectedTarjeta && (
           <div className="flex flex-1 flex-col items-center justify-center gap-4 px-8 text-center">
             <AlertCircle className="size-10 text-destructive" />
             <p className="text-sm text-muted-foreground">
               No se encontró la tarjeta seleccionada. Vuelve al paso anterior.
             </p>
             <button
-              onClick={() => setStep(2)}
+              onClick={() => setStep(4)}
               className="text-sm font-semibold text-primary"
             >
               Volver
