@@ -1502,7 +1502,8 @@ export default function EscanearPage() {
 
   // PIN state — stored here so it's available to OcrAndEditStep
   const [currentPin, setCurrentPin] = useState("");
-  const [rememberPin, setRememberPin] = useState(false);
+  // rememberPin: feature suspendida hasta que se redefina cómo debe funcionar
+  const rememberPin = false;
 
   const [assignState, setAssignState] = useState<AssignState>({
     categoria: "VEHICULO",
@@ -1554,9 +1555,8 @@ export default function EscanearPage() {
     }
   }
 
-  function handlePinConfirmed(pin: string, remember: boolean) {
+  function handlePinConfirmed(pin: string) {
     setCurrentPin(pin);
-    setRememberPin(remember);
     setStep("ocr-edit");
   }
 
@@ -1575,7 +1575,6 @@ export default function EscanearPage() {
     setImageBlob(null);
     setPreview("");
     setCurrentPin("");
-    setRememberPin(false);
     setAssignState({
       categoria: "VEHICULO",
       vehiculoId: null,
@@ -1650,6 +1649,7 @@ export default function EscanearPage() {
         {step === "pin" && selectedTarjeta && (
           <PinEntryStepWrapper
             tarjeta={selectedTarjeta}
+            previewUrl={preview}
             onBack={() => setStep("assignment")}
             onContinue={handlePinConfirmed}
           />
@@ -1699,36 +1699,50 @@ export default function EscanearPage() {
   );
 }
 
-// ─── PinEntryStepWrapper — bridges rememberPin state to parent ────────────────
-// PinEntryStep is stateful (owns pin + rememberPin) and calls onContinue(pin).
-// The parent needs rememberPin too, so we use a wrapper that reads it from a ref.
+// ─── PinEntryStepWrapper — handles PIN entry (manual or saved) ───────────────
+// Shows the captured photo preview so the operator confirms what will be sent.
 
 function PinEntryStepWrapper({
   tarjeta,
+  previewUrl,
   onBack,
   onContinue,
 }: {
   tarjeta: Tarjeta;
+  previewUrl: string;
   onBack: () => void;
-  onContinue: (pin: string, rememberPin: boolean) => void;
+  onContinue: (pin: string) => void;
 }) {
   const savedPin = getPinLocal(tarjeta.id);
   const hasSaved = savedPin !== null;
 
   const [pin, setPin] = useState("");
   const [usingSaved, setUsingSaved] = useState(hasSaved);
-  const [rememberPin, setRememberPin] = useState(false);
 
   const effectivePin = usingSaved ? (savedPin ?? "") : pin;
   const canContinue = effectivePin.length === 4;
 
   function handleContinue() {
     if (!canContinue) return;
-    onContinue(effectivePin, rememberPin);
+    onContinue(effectivePin);
   }
 
   return (
     <div className="flex flex-1 flex-col overflow-y-auto px-4 py-5">
+      {/* Photo preview — what will be sent to OCR */}
+      {previewUrl && (
+        <div className="mb-4 overflow-hidden rounded-2xl border border-border bg-card shadow-sm">
+          <img
+            src={previewUrl}
+            alt="Ticket capturado"
+            className="h-40 w-full object-cover"
+          />
+          <p className="px-3 py-2 text-center text-xs text-muted-foreground">
+            Esto es lo que se enviará al OCR
+          </p>
+        </div>
+      )}
+
       {/* Card info */}
       <div className="mb-5 flex items-center gap-3 rounded-2xl border border-border bg-card p-4 shadow-sm">
         <div className="flex size-11 items-center justify-center rounded-xl bg-primary/10">
@@ -1787,20 +1801,6 @@ function PinEntryStepWrapper({
             disabled={false}
             error={false}
           />
-
-          {!hasSaved && (
-            <label className="flex cursor-pointer items-start gap-2.5 self-stretch rounded-xl border border-border bg-card px-4 py-3">
-              <input
-                type="checkbox"
-                checked={rememberPin}
-                onChange={(e) => setRememberPin(e.target.checked)}
-                className="mt-0.5 size-4 cursor-pointer accent-primary"
-              />
-              <span className="text-sm text-foreground">
-                Recordar este PIN en este dispositivo
-              </span>
-            </label>
-          )}
         </div>
       )}
 

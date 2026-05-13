@@ -3,6 +3,7 @@ import { Inter } from "next/font/google";
 import { Toaster } from "sonner";
 import { QueryProvider } from "@/providers/query-provider";
 import { AuthProvider } from "@/providers/auth-provider";
+import { InstallPwaBanner } from "@/components/install-pwa-banner";
 import "./globals.css";
 
 // ─── Font ──────────────────────────────────────────────────────────────────────
@@ -53,6 +54,7 @@ export default function RootLayout({
         <QueryProvider>
           <AuthProvider>
             {children}
+            <InstallPwaBanner />
             <Toaster richColors position="top-center" />
           </AuthProvider>
         </QueryProvider>

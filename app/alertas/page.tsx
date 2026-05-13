@@ -1,16 +1,19 @@
 "use client";
 
-import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   AlertTriangle,
   Info,
   Loader2,
   AlertCircle,
   CheckCircle,
+  Check,
+  CheckCheck,
 } from "lucide-react";
 import { MobileShell } from "@/components/layout/mobile-shell";
 import { apiClient } from "@/lib/api-client";
 import { cn } from "@/lib/utils";
+import { toast } from "sonner";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -77,10 +80,31 @@ function sortAlertas(alertas: Alerta[]): Alerta[] {
 // ─── Page ─────────────────────────────────────────────────────────────────────
 
 export default function AlertasPage() {
+  const queryClient = useQueryClient();
+
   const { data, isLoading, isError, refetch } = useQuery<Alerta[]>({
     queryKey: ["alertas-pendientes"],
     queryFn: () => apiClient.get<Alerta[]>("/alertas/pendientes"),
     staleTime: 30_000,
+  });
+
+  const marcarUna = useMutation({
+    mutationFn: (id: number) => apiClient.patch(`/alertas/${id}/leida`, {}),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["alertas-pendientes"] });
+      queryClient.invalidateQueries({ queryKey: ["alertas-count"] });
+    },
+    onError: () => toast.error("No se pudo marcar como leída"),
+  });
+
+  const marcarTodas = useMutation({
+    mutationFn: () => apiClient.patch("/alertas/leer-todas", {}),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["alertas-pendientes"] });
+      queryClient.invalidateQueries({ queryKey: ["alertas-count"] });
+      toast.success("Alertas marcadas como leídas");
+    },
+    onError: () => toast.error("No se pudieron marcar las alertas"),
   });
 
   const alertas = sortAlertas(data ?? []);
@@ -88,14 +112,26 @@ export default function AlertasPage() {
   return (
     <MobileShell>
       <div className="flex flex-col gap-4 px-4 pt-5 pb-6">
-        <div className="flex items-center justify-between">
-          <h2 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-            Alertas pendientes
-          </h2>
+        <div className="flex items-center justify-between gap-3">
+          <div className="flex items-center gap-2">
+            <h2 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+              Alertas pendientes
+            </h2>
+            {alertas.length > 0 && (
+              <span className="rounded-full bg-destructive/15 px-2 py-0.5 text-xs font-semibold text-destructive">
+                {alertas.length}
+              </span>
+            )}
+          </div>
           {alertas.length > 0 && (
-            <span className="rounded-full bg-destructive/15 px-2 py-0.5 text-xs font-semibold text-destructive">
-              {alertas.length}
-            </span>
+            <button
+              onClick={() => marcarTodas.mutate()}
+              disabled={marcarTodas.isPending}
+              className="flex h-8 items-center gap-1.5 rounded-lg border border-primary/30 bg-primary/10 px-3 text-xs font-semibold text-primary transition-colors hover:bg-primary/20 disabled:opacity-50"
+            >
+              <CheckCheck className="size-3.5" />
+              {marcarTodas.isPending ? "Marcando…" : "Marcar todas"}
+            </button>
           )}
         </div>
 
@@ -139,6 +175,8 @@ export default function AlertasPage() {
               const isUrgent = alerta.urgente || alerta.prioridad === "ALTA";
               const isMedium = !isUrgent && alerta.prioridad === "MEDIA";
 
+              const pendingThis = marcarUna.isPending && marcarUna.variables === alerta.id;
+
               return (
                 <div
                   key={alerta.id}
@@ -159,9 +197,21 @@ export default function AlertasPage() {
                   />
                   <div className="flex-1 min-w-0">
                     <p className="text-sm font-medium text-foreground">{mensaje}</p>
-                    {fecha && (
-                      <p className="mt-0.5 text-xs text-muted-foreground">{formatDate(fecha)}</p>
-                    )}
+                    <div className="mt-1 flex items-center justify-between gap-2">
+                      {fecha ? (
+                        <p className="text-xs text-muted-foreground">{formatDate(fecha)}</p>
+                      ) : (
+                        <span />
+                      )}
+                      <button
+                        onClick={() => marcarUna.mutate(alerta.id)}
+                        disabled={pendingThis}
+                        className="flex items-center gap-1 rounded-md border border-border bg-background px-2 py-1 text-[11px] font-semibold text-foreground transition-colors hover:bg-muted disabled:opacity-50"
+                      >
+                        <Check className="size-3" />
+                        {pendingThis ? "..." : "Marcar leída"}
+                      </button>
+                    </div>
                   </div>
                   <span
                     className={cn(
