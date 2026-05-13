@@ -953,7 +953,13 @@ function PinStep({
       if (step2State.centroCosteId) params.centroCosteId = step2State.centroCosteId;
       if (step2State.kilometros) params.kilometros = Number(step2State.kilometros);
 
-      formData.append("params", JSON.stringify(params));
+      // params como Blob con Content-Type application/json para que Spring
+      // (@RequestPart) lo deserialice correctamente. Sin esto llega como
+      // application/octet-stream y devuelve 500.
+      const paramsBlob = new Blob([JSON.stringify(params)], {
+        type: "application/json",
+      });
+      formData.append("params", paramsBlob);
       return apiClient.upload<OcrResponse>("/tickets/ocr-validado", formData);
     },
     onSuccess: (data) => {
