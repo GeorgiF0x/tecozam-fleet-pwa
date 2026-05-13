@@ -222,7 +222,7 @@ export function CrearPrestamoSheet({
           </div>
 
           {/* Fechas */}
-          <div className="grid grid-cols-2 gap-3">
+          <div className="flex flex-col gap-3">
             <div>
               <label className="block text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-2">
                 Desde
@@ -231,7 +231,7 @@ export function CrearPrestamoSheet({
                 type="date"
                 value={fechaInicio}
                 onChange={(e) => setFechaInicio(e.target.value)}
-                className="h-11 w-full rounded-xl border border-border bg-card px-3 text-sm text-foreground focus:border-primary focus:outline-none"
+                className="block h-11 w-full rounded-xl border border-border bg-card px-3 text-sm text-foreground focus:border-primary focus:outline-none"
               />
             </div>
             <div>
@@ -243,7 +243,7 @@ export function CrearPrestamoSheet({
                 value={fechaFin}
                 onChange={(e) => setFechaFin(e.target.value)}
                 min={fechaInicio}
-                className="h-11 w-full rounded-xl border border-border bg-card px-3 text-sm text-foreground focus:border-primary focus:outline-none"
+                className="block h-11 w-full rounded-xl border border-border bg-card px-3 text-sm text-foreground focus:border-primary focus:outline-none"
               />
             </div>
           </div>
