@@ -146,18 +146,18 @@ export default function HomePage() {
 
   const { data: alertas = [], isLoading: alertasLoading } = useQuery<Alerta[]>({
     queryKey: ["alertas-pendientes"],
-    queryFn: () => apiClient.get<Alerta[]>("/alertas/pendientes"),
+    queryFn: () => apiClient.get<Alerta[]>("/alertas/mis-pendientes"),
     staleTime: 30_000,
   });
 
   const { data: tickets = [], isLoading: ticketsLoading } = useQuery<TicketAPI[]>({
     queryKey: ["tickets-home"],
-    queryFn: () => apiClient.get<TicketAPI[]>("/tickets"),
+    queryFn: () => apiClient.get<TicketAPI[]>("/tickets/mis-tickets"),
   });
 
   const { data: prestamos = [] } = useQuery<{ id: number; estado: string }[]>({
     queryKey: ["prestamos-home"],
-    queryFn: () => apiClient.get<{ id: number; estado: string }[]>("/prestamos"),
+    queryFn: () => apiClient.get<{ id: number; estado: string }[]>("/prestamos/mis-prestamos"),
   });
 
   const prestamosActivos = prestamos.filter(

@@ -3,7 +3,6 @@
 import { useQuery } from "@tanstack/react-query";
 import { Car, CreditCard, Radio, AlertTriangle, Loader2, AlertCircle } from "lucide-react";
 import { MobileShell } from "@/components/layout/mobile-shell";
-import { useAuth } from "@/providers/auth-provider";
 import { apiClient } from "@/lib/api-client";
 import { cn } from "@/lib/utils";
 
@@ -58,19 +57,13 @@ function formatDate(dateStr?: string): string {
 // ─── Page ─────────────────────────────────────────────────────────────────────
 
 export default function PrestamosPage() {
-  const { user } = useAuth();
-
   const { data, isLoading, isError, refetch } = useQuery<Prestamo[]>({
-    queryKey: ["prestamos"],
-    queryFn: () => apiClient.get<Prestamo[]>("/prestamos"),
+    queryKey: ["mis-prestamos"],
+    queryFn: () => apiClient.get<Prestamo[]>("/prestamos/mis-prestamos"),
     staleTime: 60_000,
   });
 
-  // Filter by current worker if trabajadorId is known
-  const prestamos = (data ?? []).filter((p) => {
-    if (!user?.trabajadorId) return true;
-    return !p.trabajadorId || p.trabajadorId === user.trabajadorId;
-  });
+  const prestamos = data ?? [];
 
   const activos = prestamos.filter(
     (p) => !p.estado || p.estado.toLowerCase() === "activo",

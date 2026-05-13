@@ -58,7 +58,7 @@ function usePageTitle(pathname: string): string {
 function useAlertCount(): number {
   const { data } = useQuery<AlertasCount[] | AlertasCount>({
     queryKey: ["alertas-count"],
-    queryFn: () => apiClient.get("/alertas/pendientes"),
+    queryFn: () => apiClient.get("/alertas/mis-pendientes"),
     staleTime: 30_000,
   });
 

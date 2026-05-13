@@ -84,7 +84,7 @@ export default function AlertasPage() {
 
   const { data, isLoading, isError, refetch } = useQuery<Alerta[]>({
     queryKey: ["alertas-pendientes"],
-    queryFn: () => apiClient.get<Alerta[]>("/alertas/pendientes"),
+    queryFn: () => apiClient.get<Alerta[]>("/alertas/mis-pendientes"),
     staleTime: 30_000,
   });
 

@@ -69,8 +69,8 @@ export default function HistorialPage() {
   const [filter, setFilter] = useState<Filter>("todos");
 
   const { data, isLoading, isError, refetch, isFetching } = useQuery<Ticket[]>({
-    queryKey: ["tickets"],
-    queryFn: () => apiClient.get<Ticket[]>("/tickets"),
+    queryKey: ["mis-tickets"],
+    queryFn: () => apiClient.get<Ticket[]>("/tickets/mis-tickets"),
   });
 
   const tickets = (data ?? [])
