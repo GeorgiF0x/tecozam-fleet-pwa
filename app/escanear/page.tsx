@@ -22,10 +22,20 @@ import {
   ChevronLeft,
   CloudUpload,
   Fingerprint,
+  Car,
+  Hammer,
+  CreditCard,
+  ScanLine,
 } from "lucide-react";
 import { toast } from "sonner";
 import { PinInput } from "@/components/shared/pin-input";
+import { SearchableSheetSelect } from "@/components/shared/searchable-sheet-select";
 import { apiClient, ApiError } from "@/lib/api-client";
+import {
+  addRecent,
+  getLastUsed,
+  getRecentItems,
+} from "@/lib/recent-storage";
 import { cn } from "@/lib/utils";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -55,13 +65,84 @@ interface Tarjeta {
   tienePinGuardado: boolean;
 }
 
+interface OcrRawData {
+  estacion?: string;
+  fecha?: string;
+  hora?: string;
+  litros?: number;
+  precioLitro?: number;
+  importeTotal?: number;
+  producto?: string;
+  matricula?: string;
+  kms?: number;
+  numRecibo?: string;
+}
+
 interface OcrResponse {
   status?: string;
   ticketId?: number;
   message?: string;
-  estacion?: string;
-  importe?: number;
-  litros?: number;
+  ocrData?: string;
+}
+
+interface Step2State {
+  categoria: Categoria;
+  vehiculoId: number | null;
+  centroCosteId: number | null;
+  tarjetaId: number | null;
+  kilometros: string;
+}
+
+// ─── Storage keys ─────────────────────────────────────────────────────────────
+
+function vehiculoKey(cat: Categoria): string {
+  return cat === "VEHICULO" ? "vehiculo-VEHICULO" : "vehiculo-INDUSTRIAL_MAQUINARIA";
+}
+
+const CENTRO_KEY = "centro-coste";
+
+// ─── Formatters ───────────────────────────────────────────────────────────────
+
+function formatFechaHora(fecha?: string, hora?: string): string | null {
+  if (!fecha) return null;
+  try {
+    const [y, m, d] = fecha.split("-").map(Number);
+    const dt = new Date(y, m - 1, d);
+    const dateStr = dt.toLocaleDateString("es-ES", {
+      day: "numeric",
+      month: "short",
+      year: "numeric",
+    });
+    return hora ? `${dateStr} · ${hora}` : dateStr;
+  } catch {
+    return fecha;
+  }
+}
+
+function formatCurrency(value?: number): string | null {
+  if (value == null) return null;
+  return new Intl.NumberFormat("es-ES", {
+    style: "currency",
+    currency: "EUR",
+  }).format(value);
+}
+
+function formatLitros(value?: number): string | null {
+  if (value == null) return null;
+  return `${new Intl.NumberFormat("es-ES", { maximumFractionDigits: 2 }).format(value)} L`;
+}
+
+function formatPrecioLitro(value?: number): string | null {
+  if (value == null) return null;
+  return `${new Intl.NumberFormat("es-ES", {
+    minimumFractionDigits: 3,
+    maximumFractionDigits: 3,
+  }).format(value)} €/L`;
+}
+
+function formatKm(value?: number): string | null {
+  if (value == null) return null;
+  return new Intl.NumberFormat("es-ES").format(value);
 }
 
 // ─── Stepper ─────────────────────────────────────────────────────────────────
@@ -96,7 +177,11 @@ function Stepper({ current }: { current: Step }) {
               <span
                 className={cn(
                   "text-[10px] font-medium",
-                  active ? "text-primary" : done ? "text-success" : "text-muted-foreground",
+                  active
+                    ? "text-primary"
+                    : done
+                    ? "text-success"
+                    : "text-muted-foreground",
                 )}
               >
                 {step.label}
@@ -119,7 +204,11 @@ function Stepper({ current }: { current: Step }) {
 
 // ─── Step 1 — Camera ─────────────────────────────────────────────────────────
 
-function CameraStep({ onCapture }: { onCapture: (blob: Blob, preview: string) => void }) {
+function CameraStep({
+  onCapture,
+}: {
+  onCapture: (blob: Blob, preview: string) => void;
+}) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const streamRef = useRef<MediaStream | null>(null);
@@ -191,12 +280,17 @@ function CameraStep({ onCapture }: { onCapture: (blob: Blob, preview: string) =>
 
   function toggleFlash() {
     setFlash((f) => !f);
-    // Try to toggle torch track if available
     const track = streamRef.current?.getVideoTracks()[0];
     if (track) {
-      const cap = track.getCapabilities() as MediaTrackCapabilities & { torch?: boolean };
+      const cap = track.getCapabilities() as MediaTrackCapabilities & {
+        torch?: boolean;
+      };
       if (cap.torch) {
-        track.applyConstraints({ advanced: [{ torch: !flash } as MediaTrackConstraintSet] }).catch(() => {});
+        track
+          .applyConstraints({
+            advanced: [{ torch: !flash } as MediaTrackConstraintSet],
+          })
+          .catch(() => {});
       }
     }
   }
@@ -205,14 +299,22 @@ function CameraStep({ onCapture }: { onCapture: (blob: Blob, preview: string) =>
     return (
       <div className="flex flex-1 flex-col items-center justify-center gap-4 px-8 text-center">
         <Camera className="size-14 text-muted-foreground" />
-        <p className="text-base font-semibold text-foreground">Sin acceso a la cámara</p>
+        <p className="text-base font-semibold text-foreground">
+          Sin acceso a la cámara
+        </p>
         <p className="text-sm text-muted-foreground">
-          No se pudo acceder a la cámara. Permite el acceso en la configuración del navegador o usa la galería.
+          No se pudo acceder a la cámara. Permite el acceso en la configuración
+          del navegador o usa la galería.
         </p>
         <label className="flex h-12 cursor-pointer items-center justify-center gap-2 rounded-xl bg-primary px-6 text-sm font-bold text-primary-foreground shadow-md shadow-primary/30 transition-all hover:bg-primary/90">
           <Images className="size-4" />
           Seleccionar de galería
-          <input type="file" accept="image/*" onChange={handleGallery} className="sr-only" />
+          <input
+            type="file"
+            accept="image/*"
+            onChange={handleGallery}
+            className="sr-only"
+          />
         </label>
       </div>
     );
@@ -232,24 +334,21 @@ function CameraStep({ onCapture }: { onCapture: (blob: Blob, preview: string) =>
 
       {/* Frame overlay */}
       <div className="absolute inset-0 flex flex-col items-center justify-center">
-        {/* Dark vignette around frame */}
-        <div className="absolute inset-0 bg-black/40" style={{
-          maskImage: "radial-gradient(ellipse 65% 70% at center, transparent 0%, black 100%)",
-          WebkitMaskImage: "radial-gradient(ellipse 65% 70% at center, transparent 0%, black 100%)",
-        }} />
-
-        {/* Corner guide */}
+        <div
+          className="absolute inset-0 bg-black/40"
+          style={{
+            maskImage:
+              "radial-gradient(ellipse 65% 70% at center, transparent 0%, black 100%)",
+            WebkitMaskImage:
+              "radial-gradient(ellipse 65% 70% at center, transparent 0%, black 100%)",
+          }}
+        />
         <div className="relative h-72 w-56">
-          {/* TL */}
           <span className="absolute left-0 top-0 h-6 w-6 border-l-[3px] border-t-[3px] border-primary rounded-tl-md" />
-          {/* TR */}
           <span className="absolute right-0 top-0 h-6 w-6 border-r-[3px] border-t-[3px] border-primary rounded-tr-md" />
-          {/* BL */}
           <span className="absolute bottom-0 left-0 h-6 w-6 border-b-[3px] border-l-[3px] border-primary rounded-bl-md" />
-          {/* BR */}
           <span className="absolute bottom-0 right-0 h-6 w-6 border-b-[3px] border-r-[3px] border-primary rounded-br-md" />
         </div>
-
         <p className="relative mt-4 text-sm text-white/70">
           Centra el ticket dentro del marco
         </p>
@@ -262,22 +361,29 @@ function CameraStep({ onCapture }: { onCapture: (blob: Blob, preview: string) =>
           className="flex size-10 items-center justify-center rounded-full bg-black/40 text-white backdrop-blur-sm"
           aria-label="Toggle flash"
         >
-          {flash ? <Zap className="size-4 text-warning" /> : <ZapOff className="size-4" />}
+          {flash ? (
+            <Zap className="size-4 text-warning" />
+          ) : (
+            <ZapOff className="size-4" />
+          )}
         </button>
       </div>
 
       {/* Bottom controls */}
       <div className="absolute bottom-0 left-0 right-0 flex items-center justify-between bg-gradient-to-t from-black/70 to-transparent px-8 pb-6 pt-10">
-        {/* Gallery */}
         <label className="flex cursor-pointer flex-col items-center gap-1">
           <div className="flex size-12 items-center justify-center rounded-full bg-white/10 backdrop-blur-sm">
             <Images className="size-5 text-white" />
           </div>
           <span className="text-[10px] text-white/70">Galería</span>
-          <input type="file" accept="image/*" onChange={handleGallery} className="sr-only" />
+          <input
+            type="file"
+            accept="image/*"
+            onChange={handleGallery}
+            className="sr-only"
+          />
         </label>
 
-        {/* Capture button */}
         <button
           onClick={handleCapture}
           disabled={capturing}
@@ -294,22 +400,222 @@ function CameraStep({ onCapture }: { onCapture: (blob: Blob, preview: string) =>
           )}
         </button>
 
-        {/* Spacer */}
         <div className="size-12" />
       </div>
     </div>
   );
 }
 
-// ─── Step 2 — Preview + form ─────────────────────────────────────────────────
+// ─── Vehicle trigger render ───────────────────────────────────────────────────
 
-interface Step2State {
+function VehiculoTrigger({
+  vehiculo,
+  categoria,
+}: {
+  vehiculo: Vehiculo | null;
   categoria: Categoria;
-  vehiculoId: number | null;
-  centroCosteId: number | null;
-  tarjetaId: number | null;
-  kilometros: string;
+}) {
+  if (!vehiculo) {
+    return (
+      <div className="flex items-center gap-2.5 text-muted-foreground">
+        {categoria === "VEHICULO" ? (
+          <Car className="size-4 shrink-0" />
+        ) : (
+          <Hammer className="size-4 shrink-0" />
+        )}
+        <span className="text-sm">
+          {categoria === "VEHICULO"
+            ? "Selecciona vehículo"
+            : "Selecciona maquinaria"}
+        </span>
+      </div>
+    );
+  }
+
+  const identifier =
+    categoria === "VEHICULO"
+      ? vehiculo.matricula ?? `#${vehiculo.id}`
+      : vehiculo.codigoObra ?? `#${vehiculo.id}`;
+
+  return (
+    <div className="flex items-center gap-2.5">
+      <div className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-primary/10">
+        {categoria === "VEHICULO" ? (
+          <Car className="size-4 text-primary" />
+        ) : (
+          <Hammer className="size-4 text-primary" />
+        )}
+      </div>
+      <div className="min-w-0">
+        <p className="font-mono text-sm font-bold tracking-widest text-foreground">
+          {identifier}
+        </p>
+        {vehiculo.nombre && (
+          <p className="truncate text-xs text-muted-foreground">
+            {vehiculo.nombre}
+          </p>
+        )}
+      </div>
+    </div>
+  );
 }
+
+function VehiculoItem({
+  vehiculo,
+  categoria,
+  isSelected,
+}: {
+  vehiculo: Vehiculo;
+  categoria: Categoria;
+  isSelected: boolean;
+}) {
+  const identifier =
+    categoria === "VEHICULO"
+      ? vehiculo.matricula ?? `#${vehiculo.id}`
+      : vehiculo.codigoObra ?? `#${vehiculo.id}`;
+
+  return (
+    <div className="flex flex-1 items-center gap-3">
+      <div
+        className={cn(
+          "flex size-9 shrink-0 items-center justify-center rounded-lg",
+          isSelected ? "bg-primary/15" : "bg-muted",
+        )}
+      >
+        {categoria === "VEHICULO" ? (
+          <Car
+            className={cn(
+              "size-4",
+              isSelected ? "text-primary" : "text-muted-foreground",
+            )}
+          />
+        ) : (
+          <Hammer
+            className={cn(
+              "size-4",
+              isSelected ? "text-primary" : "text-muted-foreground",
+            )}
+          />
+        )}
+      </div>
+      <div className="min-w-0 flex-1">
+        <p className="font-mono text-sm font-bold tracking-widest text-foreground">
+          {identifier}
+        </p>
+        {vehiculo.nombre && (
+          <p className="truncate text-xs text-muted-foreground">
+            {vehiculo.nombre}
+          </p>
+        )}
+      </div>
+      {isSelected && (
+        <CheckCircle className="size-4 shrink-0 text-primary" />
+      )}
+    </div>
+  );
+}
+
+// ─── Centro coste trigger/item renders ───────────────────────────────────────
+
+function CentroTrigger({ centro }: { centro: CentroCoste | null }) {
+  if (!centro) {
+    return (
+      <span className="text-sm text-muted-foreground">
+        Selecciona centro de coste
+      </span>
+    );
+  }
+  return <span className="text-sm font-semibold text-foreground">{centro.nombre}</span>;
+}
+
+function CentroItem({
+  centro,
+  isSelected,
+}: {
+  centro: CentroCoste;
+  isSelected: boolean;
+}) {
+  return (
+    <div className="flex flex-1 items-center justify-between">
+      <span
+        className={cn(
+          "text-sm",
+          isSelected ? "font-semibold text-foreground" : "text-foreground",
+        )}
+      >
+        {centro.nombre}
+      </span>
+      {isSelected && <CheckCircle className="size-4 shrink-0 text-primary" />}
+    </div>
+  );
+}
+
+// ─── Tarjeta trigger/item renders ────────────────────────────────────────────
+
+function TarjetaTrigger({ tarjeta }: { tarjeta: Tarjeta | null }) {
+  if (!tarjeta) {
+    return (
+      <div className="flex items-center gap-2 text-muted-foreground">
+        <CreditCard className="size-4 shrink-0" />
+        <span className="text-sm">Selecciona tarjeta</span>
+      </div>
+    );
+  }
+  return (
+    <div className="flex items-center gap-2.5">
+      <div className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-primary/10">
+        <CreditCard className="size-4 text-primary" />
+      </div>
+      <div>
+        <p className="text-sm font-semibold text-foreground">
+          {tarjeta.alias ?? `Tarjeta ${tarjeta.proveedor ?? ""}`}
+        </p>
+        <p className="text-xs tracking-widest text-muted-foreground">
+          **** {tarjeta.numeroTarjetaUltimos4}
+        </p>
+      </div>
+    </div>
+  );
+}
+
+function TarjetaItem({
+  tarjeta,
+  isSelected,
+}: {
+  tarjeta: Tarjeta;
+  isSelected: boolean;
+}) {
+  return (
+    <div className="flex flex-1 items-center gap-3">
+      <div
+        className={cn(
+          "flex size-9 shrink-0 items-center justify-center rounded-lg",
+          isSelected ? "bg-primary/15" : "bg-muted",
+        )}
+      >
+        <CreditCard
+          className={cn(
+            "size-4",
+            isSelected ? "text-primary" : "text-muted-foreground",
+          )}
+        />
+      </div>
+      <div className="min-w-0 flex-1">
+        <p className="text-sm font-semibold text-foreground">
+          {tarjeta.alias ?? `Tarjeta ${tarjeta.proveedor ?? ""}`}
+        </p>
+        <p className="text-xs tracking-widest text-muted-foreground">
+          **** {tarjeta.numeroTarjetaUltimos4}
+        </p>
+      </div>
+      {isSelected && (
+        <CheckCircle className="size-4 shrink-0 text-primary" />
+      )}
+    </div>
+  );
+}
+
+// ─── Step 2 — Preview + form ─────────────────────────────────────────────────
 
 function PreviewStep({
   preview,
@@ -327,7 +633,9 @@ function PreviewStep({
   const { data: vehiculos = [] } = useQuery<Vehiculo[]>({
     queryKey: ["vehiculos", state.categoria],
     queryFn: () =>
-      apiClient.get<Vehiculo[]>(`/vehiculos?activo=true&categoria=${state.categoria}`),
+      apiClient.get<Vehiculo[]>(
+        `/vehiculos?activo=true&categoria=${state.categoria}`,
+      ),
   });
 
   const { data: centros = [] } = useQuery<CentroCoste[]>({
@@ -340,24 +648,71 @@ function PreviewStep({
     queryFn: () => apiClient.get<Tarjeta[]>("/tarjetas/mis-tarjetas"),
   });
 
+  // ── Preload last-used from localStorage on mount / categoria change ────────
+  useEffect(() => {
+    if (vehiculos.length === 0) return;
+    const lastVehiculo = getLastUsed(vehiculoKey(state.categoria), vehiculos);
+    if (lastVehiculo && state.vehiculoId === null) {
+      setState((s) => ({
+        ...s,
+        vehiculoId: lastVehiculo.id,
+        centroCosteId: lastVehiculo.centroCosteId ?? s.centroCosteId,
+      }));
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [vehiculos, state.categoria]);
+
+  useEffect(() => {
+    if (centros.length === 0) return;
+    const lastCentro = getLastUsed(CENTRO_KEY, centros);
+    if (lastCentro && state.centroCosteId === null) {
+      setState((s) => ({ ...s, centroCosteId: lastCentro.id }));
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [centros]);
+
+  // Auto-select single tarjeta
+  useEffect(() => {
+    if (tarjetas.length === 1 && state.tarjetaId === null) {
+      setState((s) => ({ ...s, tarjetaId: tarjetas[0].id }));
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tarjetas]);
+
+  // ── Derived ───────────────────────────────────────────────────────────────
+
+  const selectedVehiculo = vehiculos.find((v) => v.id === state.vehiculoId) ?? null;
+  const selectedCentro = centros.find((c) => c.id === state.centroCosteId) ?? null;
+  const selectedTarjeta = tarjetas.find((t) => t.id === state.tarjetaId) ?? null;
+
+  const recentVehiculos = getRecentItems(vehiculoKey(state.categoria), vehiculos, 3);
+  const recentCentros = getRecentItems(CENTRO_KEY, centros, 3);
+
   const canContinue = state.vehiculoId !== null && state.tarjetaId !== null;
+
+  // ── Handlers ──────────────────────────────────────────────────────────────
 
   function handleCategoriaChange(c: Categoria) {
     setState((s) => ({ ...s, categoria: c, vehiculoId: null }));
   }
 
-  function handleVehiculoSelect(id: number) {
-    setState((s) => {
-      const v = vehiculos.find((v) => v.id === id);
-      return {
-        ...s,
-        vehiculoId: id,
-        centroCosteId: v?.centroCosteId ?? s.centroCosteId,
-      };
-    });
+  function handleVehiculoSelect(v: Vehiculo) {
+    setState((s) => ({
+      ...s,
+      vehiculoId: v.id,
+      centroCosteId: v.centroCosteId ?? s.centroCosteId,
+    }));
   }
 
-  const selectedVehiculo = vehiculos.find((v) => v.id === state.vehiculoId);
+  function handleCentroSelect(c: CentroCoste) {
+    setState((s) => ({ ...s, centroCosteId: c.id }));
+  }
+
+  function handleTarjetaSelect(t: Tarjeta) {
+    setState((s) => ({ ...s, tarjetaId: t.id }));
+  }
+
+  // ─── Render ───────────────────────────────────────────────────────────────
 
   return (
     <div className="flex flex-1 flex-col overflow-y-auto">
@@ -382,141 +737,163 @@ function PreviewStep({
       {/* Form */}
       <div className="flex flex-col gap-5 px-4 py-4">
 
-        {/* Tipo de gasto */}
+        {/* Tipo de gasto — chip selector */}
         <div className="flex flex-col gap-2">
           <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
             Tipo de gasto
           </p>
-          <div className="flex gap-2">
-            {(["VEHICULO", "INDUSTRIAL_MAQUINARIA"] as Categoria[]).map((c) => (
-              <button
-                key={c}
-                onClick={() => handleCategoriaChange(c)}
-                className={cn(
-                  "flex flex-1 items-center justify-center gap-2 rounded-xl border py-2.5 text-sm font-semibold transition-colors",
-                  state.categoria === c
-                    ? "border-primary bg-primary text-primary-foreground"
-                    : "border-border bg-card text-muted-foreground hover:bg-muted",
-                )}
-              >
-                {c === "VEHICULO" ? "Vehículo" : "Maquinaria"}
-              </button>
-            ))}
+          <div className="grid grid-cols-2 gap-2">
+            <button
+              type="button"
+              onClick={() => handleCategoriaChange("VEHICULO")}
+              className={cn(
+                "flex h-14 items-center justify-center gap-2 rounded-xl border text-sm font-semibold transition-colors",
+                state.categoria === "VEHICULO"
+                  ? "border-primary bg-primary text-primary-foreground shadow-sm shadow-primary/20"
+                  : "border-border bg-card text-foreground hover:bg-muted",
+              )}
+            >
+              <Car className="size-4" />
+              Vehículo
+            </button>
+            <button
+              type="button"
+              onClick={() => handleCategoriaChange("INDUSTRIAL_MAQUINARIA")}
+              className={cn(
+                "flex h-14 items-center justify-center gap-2 rounded-xl border text-sm font-semibold transition-colors",
+                state.categoria === "INDUSTRIAL_MAQUINARIA"
+                  ? "border-primary bg-primary text-primary-foreground shadow-sm shadow-primary/20"
+                  : "border-border bg-card text-foreground hover:bg-muted",
+              )}
+            >
+              <Hammer className="size-4" />
+              Industrial
+            </button>
           </div>
         </div>
 
-        {/* Vehículo / Maquinaria */}
-        <div className="flex flex-col gap-2">
-          <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-            {state.categoria === "VEHICULO" ? "Vehículo" : "Maquinaria"}
-          </p>
-          <div className="overflow-hidden rounded-xl border border-border bg-card">
-            {vehiculos.length === 0 ? (
-              <p className="px-4 py-3 text-sm text-muted-foreground">Sin resultados</p>
-            ) : (
-              vehiculos.map((v, idx) => (
-                <button
-                  key={v.id}
-                  onClick={() => handleVehiculoSelect(v.id)}
-                  className={cn(
-                    "flex w-full items-center justify-between px-4 py-3 text-left transition-colors",
-                    idx < vehiculos.length - 1 && "border-b border-border",
-                    state.vehiculoId === v.id ? "bg-primary/10" : "hover:bg-muted/50",
-                  )}
-                >
-                  <div>
-                    <p className="text-sm font-medium text-foreground">{v.nombre ?? `#${v.id}`}</p>
-                    <p className="text-xs text-muted-foreground tracking-widest">
-                      {state.categoria === "VEHICULO"
-                        ? (v.matricula ?? "Sin matrícula")
-                        : (v.codigoObra ?? "Sin código")}
-                    </p>
-                  </div>
-                  {state.vehiculoId === v.id && (
-                    <CheckCircle className="size-4 shrink-0 text-primary" />
-                  )}
-                </button>
-              ))
-            )}
-          </div>
-        </div>
+        {/* Vehículo / Maquinaria — searchable sheet */}
+        <SearchableSheetSelect<Vehiculo>
+          label={state.categoria === "VEHICULO" ? "Vehículo" : "Maquinaria"}
+          required
+          title={
+            state.categoria === "VEHICULO"
+              ? "Selecciona vehículo"
+              : "Selecciona maquinaria"
+          }
+          value={selectedVehiculo}
+          onChange={handleVehiculoSelect}
+          items={vehiculos}
+          emptyMessage={
+            state.categoria === "VEHICULO"
+              ? "No hay vehículos disponibles"
+              : "No hay maquinaria disponible"
+          }
+          searchPlaceholder={
+            state.categoria === "VEHICULO"
+              ? "Buscar por matrícula o descripción..."
+              : "Buscar por código o descripción..."
+          }
+          getKey={(v) => v.id}
+          getSearchText={(v) =>
+            [v.matricula, v.codigoObra, v.nombre].filter(Boolean).join(" ")
+          }
+          recentItems={recentVehiculos}
+          recentLabel="Últimos usados"
+          renderTrigger={(v) => (
+            <VehiculoTrigger vehiculo={v} categoria={state.categoria} />
+          )}
+          renderItem={(v, isSelected) => (
+            <VehiculoItem
+              vehiculo={v}
+              categoria={state.categoria}
+              isSelected={isSelected}
+            />
+          )}
+        />
 
         {/* Kilómetros — only for vehicles */}
         {state.categoria === "VEHICULO" && (
-          <div className="flex flex-col gap-2">
+          <div className="flex flex-col gap-1.5">
             <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
               Kilómetros (opcional)
             </p>
             <input
               type="number"
               value={state.kilometros}
-              onChange={(e) => setState((s) => ({ ...s, kilometros: e.target.value }))}
+              onChange={(e) =>
+                setState((s) => ({ ...s, kilometros: e.target.value }))
+              }
               placeholder="Ej: 45320"
               inputMode="numeric"
-              className="h-12 rounded-xl border border-border bg-input px-4 text-sm text-foreground placeholder:text-muted-foreground outline-none focus:border-ring focus:ring-2 focus:ring-ring/20"
+              className="h-14 rounded-xl border border-border bg-input px-4 text-sm text-foreground placeholder:text-muted-foreground outline-none focus:border-ring focus:ring-2 focus:ring-ring/20"
             />
           </div>
         )}
 
-        {/* Centro de coste */}
-        <div className="flex flex-col gap-2">
-          <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-            Centro de coste
-          </p>
-          <select
-            value={state.centroCosteId ?? ""}
-            onChange={(e) =>
-              setState((s) => ({
-                ...s,
-                centroCosteId: e.target.value ? Number(e.target.value) : null,
-              }))
-            }
-            className="h-12 rounded-xl border border-border bg-input px-4 text-sm text-foreground outline-none focus:border-ring focus:ring-2 focus:ring-ring/20"
-          >
-            <option value="">Seleccionar centro de coste</option>
-            {centros.map((c) => (
-              <option key={c.id} value={c.id}>
-                {c.nombre}
-              </option>
-            ))}
-          </select>
-        </div>
+        {/* Centro de coste — searchable sheet */}
+        <SearchableSheetSelect<CentroCoste>
+          label="Centro de coste"
+          title="Selecciona centro de coste"
+          value={selectedCentro}
+          onChange={handleCentroSelect}
+          items={centros}
+          emptyMessage="No hay centros de coste disponibles"
+          searchPlaceholder="Buscar centro..."
+          getKey={(c) => c.id}
+          getSearchText={(c) => c.nombre}
+          recentItems={recentCentros}
+          recentLabel="Últimos usados"
+          renderTrigger={(c) => <CentroTrigger centro={c} />}
+          renderItem={(c, isSelected) => (
+            <CentroItem centro={c} isSelected={isSelected} />
+          )}
+        />
 
-        {/* Tarjeta */}
-        <div className="flex flex-col gap-2">
-          <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-            Tarjeta de combustible
-          </p>
-          <div className="overflow-hidden rounded-xl border border-border bg-card">
-            {tarjetas.length === 0 ? (
-              <p className="px-4 py-3 text-sm text-muted-foreground">Sin tarjetas asignadas</p>
-            ) : (
-              tarjetas.map((t, idx) => (
-                <button
-                  key={t.id}
-                  onClick={() => setState((s) => ({ ...s, tarjetaId: t.id }))}
-                  className={cn(
-                    "flex w-full items-center justify-between px-4 py-3 text-left transition-colors",
-                    idx < tarjetas.length - 1 && "border-b border-border",
-                    state.tarjetaId === t.id ? "bg-primary/10" : "hover:bg-muted/50",
-                  )}
-                >
-                  <div>
-                    <p className="text-sm font-medium text-foreground">
-                      {t.alias ?? `Tarjeta ${t.proveedor ?? ""}`}
-                    </p>
-                    <p className="text-xs text-muted-foreground tracking-widest">
-                      **** {t.numeroTarjetaUltimos4}
-                    </p>
-                  </div>
-                  {state.tarjetaId === t.id && (
-                    <CheckCircle className="size-4 shrink-0 text-primary" />
-                  )}
-                </button>
-              ))
-            )}
+        {/* Tarjeta — sheet if multiple, inline card if single */}
+        {tarjetas.length === 1 ? (
+          <div className="flex flex-col gap-1.5">
+            <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+              Tarjeta de combustible
+            </p>
+            <div className="flex min-h-[56px] items-center gap-3 rounded-xl border border-primary/40 bg-primary/5 px-4 py-3">
+              <div className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-primary/10">
+                <CreditCard className="size-4 text-primary" />
+              </div>
+              <div className="min-w-0 flex-1">
+                <p className="text-sm font-semibold text-foreground">
+                  {tarjetas[0].alias ??
+                    `Tarjeta ${tarjetas[0].proveedor ?? ""}`}
+                </p>
+                <p className="text-xs tracking-widest text-muted-foreground">
+                  **** {tarjetas[0].numeroTarjetaUltimos4}
+                </p>
+              </div>
+              <CheckCircle className="size-4 shrink-0 text-primary" />
+            </div>
           </div>
-        </div>
+        ) : (
+          <SearchableSheetSelect<Tarjeta>
+            label="Tarjeta de combustible"
+            required
+            title="Selecciona tarjeta"
+            value={selectedTarjeta}
+            onChange={handleTarjetaSelect}
+            items={tarjetas}
+            emptyMessage="Sin tarjetas asignadas"
+            searchPlaceholder="Buscar tarjeta..."
+            getKey={(t) => t.id}
+            getSearchText={(t) =>
+              [t.alias, t.proveedor, t.numeroTarjetaUltimos4]
+                .filter(Boolean)
+                .join(" ")
+            }
+            renderTrigger={(t) => <TarjetaTrigger tarjeta={t} />}
+            renderItem={(t, isSelected) => (
+              <TarjetaItem tarjeta={t} isSelected={isSelected} />
+            )}
+          />
+        )}
 
         {/* Actions */}
         <div className="flex gap-3 pt-2">
@@ -550,12 +927,14 @@ function PinStep({
   onSuccess,
   imageBlob,
   step2State,
+  onSaveRecents,
 }: {
   tarjeta: Tarjeta;
   onBack: () => void;
   onSuccess: (result: OcrResponse) => void;
   imageBlob: Blob;
   step2State: Step2State;
+  onSaveRecents: () => void;
 }) {
   const [pin, setPin] = useState("");
   const [pinError, setPinError] = useState<string | null>(null);
@@ -581,6 +960,8 @@ function PinStep({
       if (typeof navigator !== "undefined" && navigator.vibrate) {
         navigator.vibrate(50);
       }
+      // Save recents on successful submission
+      onSaveRecents();
       onSuccess(data);
     },
     onError: (err) => {
@@ -657,7 +1038,9 @@ function PinStep({
       {tarjeta.tienePinGuardado && (
         <div className="my-4 flex items-center gap-3">
           <div className="flex-1 h-px bg-border" />
-          <span className="text-xs text-muted-foreground">o introduce el PIN</span>
+          <span className="text-xs text-muted-foreground">
+            o introduce el PIN
+          </span>
           <div className="flex-1 h-px bg-border" />
         </div>
       )}
@@ -724,46 +1107,141 @@ function PinStep({
 
 // ─── Success view ─────────────────────────────────────────────────────────────
 
-function SuccessView({ result, onHome }: { result: OcrResponse; onHome: () => void }) {
+interface OcrField {
+  label: string;
+  value: string | null;
+}
+
+function SuccessView({
+  result,
+  tarjeta,
+  onHome,
+  onScanAnother,
+}: {
+  result: OcrResponse;
+  tarjeta: Tarjeta | null;
+  onHome: () => void;
+  onScanAnother: () => void;
+}) {
+  // Parse ocrData (string JSON)
+  let ocr: OcrRawData | null = null;
+  if (result.ocrData) {
+    try {
+      ocr = JSON.parse(result.ocrData) as OcrRawData;
+    } catch {
+      ocr = null;
+    }
+  }
+
+  const fields: OcrField[] = ocr
+    ? [
+        { label: "Estación", value: ocr.estacion ?? null },
+        {
+          label: "Fecha y hora",
+          value: formatFechaHora(ocr.fecha, ocr.hora),
+        },
+        { label: "Producto", value: ocr.producto ?? null },
+        { label: "Litros", value: formatLitros(ocr.litros) },
+        { label: "Precio/L", value: formatPrecioLitro(ocr.precioLitro) },
+        { label: "Importe", value: formatCurrency(ocr.importeTotal) },
+        { label: "Matrícula", value: ocr.matricula ?? null },
+        { label: "Km", value: formatKm(ocr.kms) },
+        { label: "Nº recibo", value: ocr.numRecibo ?? null },
+      ].filter((f): f is { label: string; value: string } => f.value !== null)
+    : [];
+
   return (
-    <div className="flex flex-1 flex-col items-center justify-center gap-5 px-8 text-center">
-      <div className="flex size-24 items-center justify-center rounded-full bg-success/15 border border-success/30">
-        <CheckCircle className="size-12 text-success" />
-      </div>
-      <div>
-        <p className="text-2xl font-bold text-foreground">Ticket enviado</p>
-        <p className="mt-2 text-sm text-muted-foreground">
-          Tu ticket ha sido registrado correctamente.
-        </p>
+    <div className="flex flex-1 flex-col overflow-y-auto px-4 py-6">
+      {/* Success icon */}
+      <div className="flex flex-col items-center gap-3 pb-5">
+        <div className="flex size-20 items-center justify-center rounded-full bg-success/15 border-2 border-success/30">
+          <CheckCircle className="size-10 text-success" />
+        </div>
+        <div className="text-center">
+          <p className="text-xl font-bold text-foreground">Ticket procesado</p>
+          <p className="mt-1 text-sm text-muted-foreground">
+            Tu gasto se ha registrado correctamente
+          </p>
+        </div>
       </div>
 
-      {/* OCR data if available */}
-      {(result.estacion || result.importe) && (
-        <div className="w-full rounded-xl border border-border bg-card p-4 text-left">
-          {result.estacion && (
-            <div className="flex justify-between py-1.5">
-              <span className="text-xs text-muted-foreground">Estación</span>
-              <span className="text-xs font-semibold text-foreground">{result.estacion}</span>
-            </div>
-          )}
-          {result.importe != null && (
-            <div className="flex justify-between border-t border-border py-1.5">
-              <span className="text-xs text-muted-foreground">Importe</span>
-              <span className="text-xs font-semibold tabular-nums text-foreground">
-                {new Intl.NumberFormat("es-ES", { style: "currency", currency: "EUR" }).format(result.importe)}
-              </span>
-            </div>
-          )}
+      {/* OCR data card */}
+      {fields.length > 0 && (
+        <div className="mb-4 overflow-hidden rounded-2xl border border-primary/30 bg-card shadow-sm">
+          <div className="border-b border-border bg-primary/5 px-4 py-3">
+            <p className="text-xs font-semibold uppercase tracking-widest text-primary">
+              Datos extraídos del ticket
+            </p>
+          </div>
+          <div className="divide-y divide-border">
+            {fields.map((field) => (
+              <div
+                key={field.label}
+                className="flex items-baseline justify-between gap-4 px-4 py-2.5"
+              >
+                <span className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                  {field.label}
+                </span>
+                <span className="font-mono text-sm tabular-nums text-foreground">
+                  {field.value}
+                </span>
+              </div>
+            ))}
+          </div>
         </div>
       )}
 
-      <button
-        onClick={onHome}
-        className="flex h-12 w-full items-center justify-center gap-2 rounded-xl bg-primary text-sm font-bold text-primary-foreground shadow-md shadow-primary/30 transition-all hover:bg-primary/90 active:scale-[0.98]"
-      >
-        <Home className="size-4" />
-        Volver al inicio
-      </button>
+      {/* Ticket metadata */}
+      <div className="mb-6 overflow-hidden rounded-2xl border border-border bg-card shadow-sm">
+        <div className="divide-y divide-border">
+          {result.ticketId && (
+            <div className="flex items-center justify-between px-4 py-3">
+              <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                Ticket ID
+              </span>
+              <span className="font-mono text-sm font-bold text-foreground">
+                #{result.ticketId}
+              </span>
+            </div>
+          )}
+          {tarjeta && (
+            <div className="flex items-center justify-between px-4 py-3">
+              <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                Tarjeta
+              </span>
+              <span className="text-sm text-foreground tracking-widest">
+                **** {tarjeta.numeroTarjetaUltimos4}
+              </span>
+            </div>
+          )}
+          <div className="flex items-center justify-between px-4 py-3">
+            <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+              Estado
+            </span>
+            <span className="rounded-full bg-warning/15 px-2.5 py-0.5 text-xs font-semibold text-warning">
+              Pendiente de cotejo
+            </span>
+          </div>
+        </div>
+      </div>
+
+      {/* Actions */}
+      <div className="flex gap-3">
+        <button
+          onClick={onHome}
+          className="flex h-12 flex-1 items-center justify-center gap-2 rounded-xl border border-border bg-card text-sm font-semibold text-foreground transition-colors hover:bg-muted active:scale-[0.98]"
+        >
+          <Home className="size-4" />
+          Inicio
+        </button>
+        <button
+          onClick={onScanAnother}
+          className="flex h-12 flex-[2] items-center justify-center gap-2 rounded-xl bg-primary text-sm font-bold text-primary-foreground shadow-md shadow-primary/30 transition-all hover:bg-primary/90 active:scale-[0.98]"
+        >
+          <ScanLine className="size-4" />
+          Escanear otro
+        </button>
+      </div>
     </div>
   );
 }
@@ -792,7 +1270,8 @@ export default function EscanearPage() {
     enabled: step === 3,
   });
 
-  const selectedTarjeta = tarjetas.find((t) => t.id === step2State.tarjetaId);
+  const selectedTarjeta =
+    tarjetas.find((t) => t.id === step2State.tarjetaId) ?? null;
 
   function handleCapture(blob: Blob, previewUrl: string) {
     setImageBlob(blob);
@@ -806,11 +1285,45 @@ export default function EscanearPage() {
     else setStep(2);
   }
 
+  function handleSaveRecents() {
+    if (step2State.vehiculoId !== null) {
+      addRecent(vehiculoKey(step2State.categoria), step2State.vehiculoId);
+    }
+    if (step2State.centroCosteId !== null) {
+      addRecent(CENTRO_KEY, step2State.centroCosteId);
+    }
+  }
+
+  function handleScanAnother() {
+    setDone(false);
+    setOcrResult(null);
+    setImageBlob(null);
+    setPreview("");
+    setStep2State({
+      categoria: "VEHICULO",
+      vehiculoId: null,
+      centroCosteId: null,
+      tarjetaId: null,
+      kilometros: "",
+    });
+    setStep(1);
+  }
+
   if (done && ocrResult) {
     return (
       <div className="flex min-h-screen flex-col bg-background">
         <div className="mx-auto flex w-full max-w-[480px] flex-1 flex-col">
-          <SuccessView result={ocrResult} onHome={() => router.push("/")} />
+          <header className="flex items-center gap-3 border-b border-border px-4 py-3">
+            <h1 className="text-base font-bold text-foreground">
+              Ticket registrado
+            </h1>
+          </header>
+          <SuccessView
+            result={ocrResult}
+            tarjeta={selectedTarjeta}
+            onHome={() => router.push("/")}
+            onScanAnother={handleScanAnother}
+          />
         </div>
       </div>
     );
@@ -819,7 +1332,6 @@ export default function EscanearPage() {
   return (
     <div className="flex min-h-screen flex-col bg-background">
       <div className="mx-auto flex w-full max-w-[480px] flex-1 flex-col">
-
         {/* Header */}
         <header className="flex items-center gap-3 border-b border-border px-4 py-3">
           <button
@@ -858,6 +1370,7 @@ export default function EscanearPage() {
             }}
             imageBlob={imageBlob}
             step2State={step2State}
+            onSaveRecents={handleSaveRecents}
           />
         )}
 
@@ -868,12 +1381,14 @@ export default function EscanearPage() {
             <p className="text-sm text-muted-foreground">
               No se encontró la tarjeta seleccionada. Vuelve al paso anterior.
             </p>
-            <button onClick={() => setStep(2)} className="text-sm font-semibold text-primary">
+            <button
+              onClick={() => setStep(2)}
+              className="text-sm font-semibold text-primary"
+            >
               Volver
             </button>
           </div>
         )}
-
       </div>
     </div>
   );
