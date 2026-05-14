@@ -1,7 +1,6 @@
 "use client";
 
-import { useState } from "react";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useQuery } from "@tanstack/react-query";
 import {
   Car,
   CreditCard,
@@ -9,16 +8,10 @@ import {
   AlertTriangle,
   Loader2,
   AlertCircle,
-  Plus,
-  Undo2,
-  UserPlus,
-  Building2,
 } from "lucide-react";
 import { MobileShell } from "@/components/layout/mobile-shell";
-import { CrearPrestamoSheet } from "@/components/crear-prestamo-sheet";
 import { apiClient } from "@/lib/api-client";
 import { cn } from "@/lib/utils";
-import { toast } from "sonner";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -32,10 +25,7 @@ interface Prestamo {
   estado?: string;
   trabajadorId?: number;
   centroCosteNombre?: string;
-  creadoPorCampo?: boolean;
 }
-
-type Tab = "hechos" | "recibidos";
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -66,91 +56,35 @@ function formatDate(dateStr?: string): string {
 // ─── Page ─────────────────────────────────────────────────────────────────────
 
 export default function PrestamosPage() {
-  const queryClient = useQueryClient();
-  const [tab, setTab] = useState<Tab>("hechos");
-  const [showCrearSheet, setShowCrearSheet] = useState(false);
-
   const { data, isLoading, isError, refetch } = useQuery<Prestamo[]>({
     queryKey: ["mis-prestamos"],
     queryFn: () => apiClient.get<Prestamo[]>("/prestamos/mis-prestamos"),
     staleTime: 60_000,
   });
 
-  const devolverMutation = useMutation({
-    mutationFn: (id: number) =>
-      apiClient.post(`/prestamos/${id}/mis-devoluciones`, {}),
-    onSuccess: () => {
-      toast.success("Préstamo devuelto");
-      queryClient.invalidateQueries({ queryKey: ["mis-prestamos"] });
-    },
-    onError: (err: Error) => toast.error(err.message || "No se pudo devolver"),
-  });
-
   const prestamos = data ?? [];
-  const hechos = prestamos.filter((p) => p.creadoPorCampo === true);
-  const recibidos = prestamos.filter((p) => !p.creadoPorCampo);
-  const activosVista = (tab === "hechos" ? hechos : recibidos).filter(
+  const activos = prestamos.filter(
     (p) => !p.estado || p.estado.toLowerCase() === "activo" || p.estado.toLowerCase() === "vencido",
   );
-
-  function handleDevolver(id: number) {
-    if (confirm("¿Marcar este préstamo como devuelto?")) {
-      devolverMutation.mutate(id);
-    }
-  }
 
   return (
     <MobileShell>
       <div className="flex flex-col gap-4 px-4 pt-5 pb-6">
-        {/* Header con botón nuevo */}
         <div className="flex items-center justify-between gap-3">
           <h2 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
             Mis préstamos
           </h2>
-          <button
-            onClick={() => setShowCrearSheet(true)}
-            className="flex h-9 items-center gap-1.5 rounded-lg bg-primary px-3 text-xs font-bold text-primary-foreground shadow-sm shadow-primary/30 transition-all hover:bg-primary/90 active:scale-[0.98]"
-          >
-            <Plus className="size-3.5" />
-            Nuevo
-          </button>
+          {activos.length > 0 && (
+            <span className="rounded-full bg-primary/15 px-2 py-0.5 text-xs font-semibold text-primary">
+              {activos.length}
+            </span>
+          )}
         </div>
 
-        {/* Tabs */}
-        <div className="grid grid-cols-2 gap-2 rounded-xl border border-border bg-muted/40 p-1">
-          <button
-            onClick={() => setTab("hechos")}
-            className={cn(
-              "flex items-center justify-center gap-1.5 rounded-lg py-2 text-xs font-semibold transition-colors",
-              tab === "hechos" ? "bg-card text-foreground shadow-sm" : "text-muted-foreground",
-            )}
-          >
-            <UserPlus className="size-3.5" />
-            Hechos por mí
-            {hechos.length > 0 && (
-              <span className="ml-1 rounded-full bg-primary/15 px-1.5 py-0.5 text-[10px] font-bold text-primary">
-                {hechos.length}
-              </span>
-            )}
-          </button>
-          <button
-            onClick={() => setTab("recibidos")}
-            className={cn(
-              "flex items-center justify-center gap-1.5 rounded-lg py-2 text-xs font-semibold transition-colors",
-              tab === "recibidos" ? "bg-card text-foreground shadow-sm" : "text-muted-foreground",
-            )}
-          >
-            <Building2 className="size-3.5" />
-            De oficina
-            {recibidos.length > 0 && (
-              <span className="ml-1 rounded-full bg-primary/15 px-1.5 py-0.5 text-[10px] font-bold text-primary">
-                {recibidos.length}
-              </span>
-            )}
-          </button>
-        </div>
+        <p className="text-xs text-muted-foreground">
+          Recursos que tienes asignados desde oficina. La gestión (alta, devolución, cierre) se hace desde el panel de administración.
+        </p>
 
-        {/* Estado */}
         {isLoading && (
           <div className="flex flex-col items-center gap-3 py-12">
             <Loader2 className="size-6 animate-spin text-primary" />
@@ -171,29 +105,23 @@ export default function PrestamosPage() {
           </div>
         )}
 
-        {!isLoading && !isError && activosVista.length === 0 && (
+        {!isLoading && !isError && activos.length === 0 && (
           <div className="flex flex-col items-center gap-3 py-12 text-center">
             <div className="flex size-16 items-center justify-center rounded-full border border-border bg-card">
               <Car className="size-7 text-muted-foreground" />
             </div>
-            <p className="text-base font-semibold text-foreground">
-              {tab === "hechos" ? "No has creado préstamos" : "Sin préstamos de oficina"}
-            </p>
+            <p className="text-base font-semibold text-foreground">Sin préstamos activos</p>
             <p className="text-sm text-muted-foreground">
-              {tab === "hechos"
-                ? "Toca Nuevo para auto-asignarte un recurso"
-                : "No tienes préstamos asignados desde oficina."}
+              No tienes préstamos asignados en este momento.
             </p>
           </div>
         )}
 
-        {!isLoading && !isError && activosVista.length > 0 && (
+        {!isLoading && !isError && activos.length > 0 && (
           <div className="flex flex-col gap-3">
-            {activosVista.map((p) => {
+            {activos.map((p) => {
               const Icon = recursoIcon(p.tipoRecurso);
               const urgencia = urgenciaBadge(p);
-              const isPendingThis =
-                devolverMutation.isPending && devolverMutation.variables === p.id;
 
               return (
                 <div
@@ -241,30 +169,12 @@ export default function PrestamosPage() {
                       </div>
                     )}
                   </div>
-
-                  <button
-                    onClick={() => handleDevolver(p.id)}
-                    disabled={isPendingThis}
-                    className="flex h-9 items-center justify-center gap-1.5 rounded-lg border border-border bg-muted/50 text-sm font-semibold text-foreground transition-colors hover:bg-muted disabled:opacity-50"
-                  >
-                    {isPendingThis ? (
-                      <>
-                        <Loader2 className="size-3.5 animate-spin" /> Devolviendo...
-                      </>
-                    ) : (
-                      <>
-                        <Undo2 className="size-3.5" /> Devolver
-                      </>
-                    )}
-                  </button>
                 </div>
               );
             })}
           </div>
         )}
       </div>
-
-      <CrearPrestamoSheet open={showCrearSheet} onClose={() => setShowCrearSheet(false)} />
     </MobileShell>
   );
 }
