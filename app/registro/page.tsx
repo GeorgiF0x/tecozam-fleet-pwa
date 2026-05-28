@@ -199,7 +199,7 @@ export default function RegistroPage() {
             >
               <input
                 {...register("dni")}
-                placeholder="12345678A · X8971999K"
+                placeholder="12345678A · X1234567A"
                 autoCapitalize="characters"
                 className={inputCls(!!errors.dni)}
               />
