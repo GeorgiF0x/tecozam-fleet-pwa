@@ -22,7 +22,15 @@ const schema = z
     dni: z
       .string()
       .optional()
-      .refine((v) => !v || /^[0-9]{8}[A-Za-z]$/.test(v), "DNI inválido"),
+      .refine(
+        (v) =>
+          !v ||
+          // DNI español:    8 dígitos + letra            → 12345678A
+          // NIE español:    X|Y|Z + 7 dígitos + letra    → X8971999K
+          // Documento ext.: alfanumérico 5-20 chars      → pasaportes / IDs extranjeros
+          /^(\d{8}[A-Za-z]|[XYZxyz]\d{7}[A-Za-z]|[A-Za-z0-9-]{5,20})$/.test(v),
+        "Formato no válido (DNI, NIE o documento de identidad)",
+      ),
     username: z
       .string()
       .min(4, "Mínimo 4 caracteres")
@@ -185,10 +193,13 @@ export default function RegistroPage() {
               />
             </Field>
 
-            <Field label="DNI (opcional)" error={errors.dni?.message}>
+            <Field
+              label="DNI / NIE (opcional)"
+              error={errors.dni?.message}
+            >
               <input
                 {...register("dni")}
-                placeholder="12345678A"
+                placeholder="12345678A · X8971999K"
                 autoCapitalize="characters"
                 className={inputCls(!!errors.dni)}
               />
