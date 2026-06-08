@@ -46,7 +46,7 @@ export default function LoginPage() {
           <div className="size-20 overflow-hidden rounded-2xl border-2 border-primary/20 shadow-lg">
             <Image
               src="/tecozam-logo.png"
-              alt="Tecozam Fleet"
+              alt="Tecozam Operarios"
               width={80}
               height={80}
               className="object-cover size-full"
@@ -56,7 +56,7 @@ export default function LoginPage() {
           <div className="text-center">
             <h1 className="text-3xl font-bold tracking-tight">
               <span className="text-primary">Tecozam</span>{" "}
-              <span className="text-foreground">Fleet</span>
+              <span className="text-foreground">Operarios</span>
             </h1>
             <p className="mt-1 text-sm text-muted-foreground">
               Operarios · Sistema de control de gastos
@@ -162,7 +162,7 @@ export default function LoginPage() {
 
         {/* Footer */}
         <p className="text-center text-xs text-muted-foreground/50">
-          Tecozam Fleet © {new Date().getFullYear()}
+          Tecozam Operarios © {new Date().getFullYear()}
         </p>
       </div>
     </div>

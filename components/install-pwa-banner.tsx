@@ -71,7 +71,7 @@ export function InstallPwaBanner() {
         </div>
 
         <div className="flex-1 min-w-0">
-          <p className="text-sm font-bold text-foreground">Instalar Tecozam Fleet</p>
+          <p className="text-sm font-bold text-foreground">Instalar Tecozam Operarios</p>
 
           {deferredPrompt && (
             <>

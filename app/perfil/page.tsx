@@ -58,7 +58,7 @@ export default function PerfilPage() {
 
         {/* ── Version ─────────────────────────────────────────── */}
         <p className="text-center text-xs text-muted-foreground/50">
-          Tecozam Fleet PWA v{VERSION}
+          Tecozam Operarios PWA v{VERSION}
         </p>
       </div>
     </MobileShell>

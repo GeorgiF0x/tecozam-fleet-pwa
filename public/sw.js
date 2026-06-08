@@ -1,4 +1,4 @@
-// ─── Tecozam Fleet — Service Worker ──────────────────────────────────────────
+// ─── Tecozam Operarios — Service Worker ──────────────────────────────────────
 // Cache-first for shell assets, network-first for API.
 
 const CACHE_VERSION = "tecozam-fleet-v1";

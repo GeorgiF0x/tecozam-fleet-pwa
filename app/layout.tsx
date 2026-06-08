@@ -16,13 +16,13 @@ const inter = Inter({
 // ─── Metadata ─────────────────────────────────────────────────────────────────
 
 export const metadata: Metadata = {
-  title: "Tecozam Fleet",
+  title: "Tecozam Operarios",
   description: "App para conductores y operarios de Tecozam — escaneo de tickets, préstamos y alertas",
   manifest: "/manifest.webmanifest",
   appleWebApp: {
     capable: true,
     statusBarStyle: "black-translucent",
-    title: "Tecozam Fleet",
+    title: "Tecozam Operarios",
   },
   icons: {
     apple: "/icon-192.png",

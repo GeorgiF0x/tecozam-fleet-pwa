@@ -50,7 +50,7 @@ function usePageTitle(pathname: string): string {
   if (pathname.startsWith("/perfil")) return "Mi Perfil";
   if (pathname.startsWith("/historial")) return "Historial";
   if (pathname.startsWith("/alertas")) return "Alertas";
-  return "Tecozam Fleet";
+  return "Tecozam Operarios";
 }
 
 // ─── Alert badge query ────────────────────────────────────────────────────────
