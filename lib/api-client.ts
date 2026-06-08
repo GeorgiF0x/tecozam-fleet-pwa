@@ -1,6 +1,8 @@
 // ─── API Client ───────────────────────────────────────────────────────────────
 // Thin fetch wrapper with auto-auth, token refresh and typed errors.
 
+import { toast } from "sonner";
+
 const BASE_URL =
   process.env.NEXT_PUBLIC_API_URL ?? "https://bills-api.z-innova.com";
 
@@ -59,12 +61,31 @@ function normalisePath(path: string): string {
 
 // ── Redirect helper ────────────────────────────────────────────────────────────
 
+let sessionExpiredNotified = false;
+
 function redirectToLogin(): never {
   tokens.clear();
   if (typeof window !== "undefined") {
+    if (!sessionExpiredNotified && !window.location.pathname.startsWith("/login")) {
+      sessionExpiredNotified = true;
+      toast.error("Tu sesion ha expirado", {
+        description: "Vuelve a iniciar sesion para continuar.",
+        duration: 6000,
+      });
+    }
     window.location.href = "/login";
   }
   throw new ApiError(401, "Session expired");
+}
+
+function notifyForbidden(message: string) {
+  toast.error("Sin permisos", {
+    description:
+      message && message.length < 160
+        ? message
+        : "No tienes permisos para esta accion.",
+    duration: 5000,
+  });
 }
 
 // ── Token refresh ──────────────────────────────────────────────────────────────
@@ -130,6 +151,9 @@ async function request<T>(
       message = body?.message ?? body?.error ?? message;
     } catch {
       // ignore parse errors
+    }
+    if (res.status === 403) {
+      notifyForbidden(message);
     }
     throw new ApiError(res.status, message);
   }
