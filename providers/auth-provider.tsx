@@ -30,7 +30,7 @@ interface AuthContextValue {
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
-const PUBLIC_PATHS = ["/login", "/registro"];
+const PUBLIC_PATHS = ["/login"];
 
 const ALLOWED_ROLES = [
   "ROLE_CAMPO",

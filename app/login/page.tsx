@@ -1,7 +1,6 @@
 "use client";
 
 import { useState, useRef } from "react";
-import Link from "next/link";
 import Image from "next/image";
 import { Eye, EyeOff, User, Lock, AlertCircle, Loader2 } from "lucide-react";
 import { useAuth } from "@/providers/auth-provider";
@@ -160,14 +159,6 @@ export default function LoginPage() {
             </button>
           </form>
         </div>
-
-        {/* ── Register link ────────────────────────────────────── */}
-        <p className="text-center text-sm text-muted-foreground">
-          ¿No tienes cuenta?{" "}
-          <Link href="/registro" className="font-semibold text-primary hover:underline">
-            Regístrate
-          </Link>
-        </p>
 
         {/* Footer */}
         <p className="text-center text-xs text-muted-foreground/50">
