@@ -55,6 +55,9 @@ self.addEventListener("fetch", (event) => {
   // Skip non-GET and API requests (always network for API)
   if (request.method !== "GET") return;
   if (url.origin === API_ORIGIN) return;
+  // Solo cachear http(s); chrome-extension:// y otros esquemas no son soportados
+  // por la Cache API y revientan el SW si intentamos hacer cache.put.
+  if (url.protocol !== "http:" && url.protocol !== "https:") return;
 
   // Network-first for navigation
   if (request.mode === "navigate") {

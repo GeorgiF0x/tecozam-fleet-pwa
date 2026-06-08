@@ -49,8 +49,11 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <html lang="es" className="dark h-full">
-      <body className={`${inter.variable} h-full bg-background text-foreground font-sans antialiased`}>
+    <html lang="es" className="dark h-full" suppressHydrationWarning>
+      <body
+        className={`${inter.variable} h-full bg-background text-foreground font-sans antialiased`}
+        suppressHydrationWarning
+      >
         <QueryProvider>
           <AuthProvider>
             {children}
