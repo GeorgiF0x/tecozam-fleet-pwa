@@ -9,6 +9,7 @@ import {
   type ReactNode,
 } from "react";
 import { useRouter, usePathname } from "next/navigation";
+import { useQueryClient } from "@tanstack/react-query";
 import { apiClient, tokens, ApiError } from "@/lib/api-client";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -73,6 +74,7 @@ const AuthContext = createContext<AuthContextValue | null>(null);
 export function AuthProvider({ children }: { children: ReactNode }) {
   const router = useRouter();
   const pathname = usePathname();
+  const queryClient = useQueryClient();
 
   const [user, setUser] = useState<AuthUser | null>(null);
   const [isLoading, setIsLoading] = useState(true);
@@ -167,12 +169,32 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   );
 
   // ── Logout ────────────────────────────────────────────────────────────────
-
+  // FLEET-02: limpieza completa del estado de sesion. Si no limpiamos la cache
+  // de TanStack Query ni el localStorage del usuario anterior, al iniciar sesion
+  // con otro usuario se ven temporalmente sus datos (riesgo de seguridad y de
+  // que los tickets queden asociados al usuario incorrecto).
   const logout = useCallback(() => {
     tokens.clear();
     setUser(null);
+    queryClient.clear();
+    if (typeof window !== "undefined") {
+      try {
+        // Borrar todas las preferencias por-usuario que cachemos en localStorage
+        Object.keys(window.localStorage).forEach((key) => {
+          if (
+            key.startsWith("recent-") ||
+            key.startsWith("pin-") ||
+            key.startsWith("last-")
+          ) {
+            window.localStorage.removeItem(key);
+          }
+        });
+      } catch {
+        // ignore
+      }
+    }
     router.replace("/login");
-  }, [router]);
+  }, [router, queryClient]);
 
   // ── Value ─────────────────────────────────────────────────────────────────
 

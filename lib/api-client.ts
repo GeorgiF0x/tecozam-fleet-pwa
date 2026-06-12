@@ -18,21 +18,24 @@ export class ApiError extends Error {
   }
 }
 
-// ── Token helpers (sessionStorage — SSR safe) ─────────────────────────────────
+// ── Token helpers (localStorage — SSR safe, persiste al cerrar la PWA) ───────
+// FLEET-03: cambiamos de sessionStorage a localStorage para que la sesion
+// sobreviva al cierre y reapertura de la aplicacion. El access token expira en
+// 30 min y se renueva via /auth/campo/refresh; el refresh token vive 7 dias.
 
 function getToken(key: string): string | null {
   if (typeof window === "undefined") return null;
-  return sessionStorage.getItem(key);
+  return localStorage.getItem(key);
 }
 
 function setToken(key: string, value: string): void {
   if (typeof window === "undefined") return;
-  sessionStorage.setItem(key, value);
+  localStorage.setItem(key, value);
 }
 
 function removeToken(key: string): void {
   if (typeof window === "undefined") return;
-  sessionStorage.removeItem(key);
+  localStorage.removeItem(key);
 }
 
 export const tokens = {
@@ -63,10 +66,14 @@ function normalisePath(path: string): string {
 
 let sessionExpiredNotified = false;
 
+function isOnLoginPath(): boolean {
+  return typeof window !== "undefined" && window.location.pathname.startsWith("/login");
+}
+
 function redirectToLogin(): never {
   tokens.clear();
   if (typeof window !== "undefined") {
-    if (!sessionExpiredNotified && !window.location.pathname.startsWith("/login")) {
+    if (!sessionExpiredNotified && !isOnLoginPath()) {
       sessionExpiredNotified = true;
       toast.error("Tu sesion ha expirado", {
         description: "Vuelve a iniciar sesion para continuar.",
@@ -79,6 +86,10 @@ function redirectToLogin(): never {
 }
 
 function notifyForbidden(message: string) {
+  // FLEET-02/03/BILLS-09: silenciamos el toast cuando ya estamos en /login,
+  // porque las queries autenticadas pueden dispararse en background mientras
+  // el usuario aun no ha iniciado sesion y mostrarian errores irrelevantes.
+  if (isOnLoginPath()) return;
   toast.error("Sin permisos", {
     description:
       message && message.length < 160
