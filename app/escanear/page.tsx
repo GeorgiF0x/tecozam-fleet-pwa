@@ -28,7 +28,6 @@ import {
   Sparkles,
 } from "lucide-react";
 import { toast } from "sonner";
-import { PinInput } from "@/components/shared/pin-input";
 import { SearchableSheetSelect } from "@/components/shared/searchable-sheet-select";
 import { apiClient, ApiError } from "@/lib/api-client";
 import {
@@ -36,10 +35,6 @@ import {
   getLastUsed,
   getRecentItems,
 } from "@/lib/recent-storage";
-import {
-  savePinLocal,
-  hasPinLocal,
-} from "@/lib/pin-storage";
 import { cn } from "@/lib/utils";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -48,7 +43,6 @@ type Step =
   | "camera"
   | "image-preview"
   | "assignment"
-  | "pin"
   | "ocr-edit"
   | "success";
 
@@ -183,8 +177,7 @@ function formatPrecioLitro(value?: number): string | null {
 const STEPS = [
   { key: 1, label: "Captura" },
   { key: 2, label: "Asignación" },
-  { key: 3, label: "PIN" },
-  { key: 4, label: "Datos" },
+  { key: 3, label: "Datos" },
 ] as const;
 
 function stepToVisual(step: Step): number {
@@ -194,12 +187,10 @@ function stepToVisual(step: Step): number {
       return 1;
     case "assignment":
       return 2;
-    case "pin":
-      return 3;
     case "ocr-edit":
-      return 4;
+      return 3;
     case "success":
-      return 4;
+      return 3;
   }
 }
 
@@ -1037,45 +1028,29 @@ type OcrSubState = "loading" | "ready" | "error";
 function OcrAndEditStep({
   imageBlob,
   assignState,
-  pin,
   tarjeta,
-  onPinRejected,
   onBack,
   onSuccess,
   onSaveRecents,
-  rememberPin,
 }: {
   imageBlob: Blob;
   assignState: AssignState;
-  pin: string;
   tarjeta: Tarjeta;
-  onPinRejected: () => void;
   onBack: () => void;
   onSuccess: (result: OcrResponse, ocrData: EditableOcrData) => void;
   onSaveRecents: () => void;
-  rememberPin: boolean;
 }) {
   const [subState, setSubState] = useState<OcrSubState>("loading");
   const [ocrData, setOcrData] = useState<EditableOcrData>(emptyEditable());
   const [submitError, setSubmitError] = useState<string | null>(null);
 
-  // Mutation to save PIN to backend + sessionStorage
-  const savePinMutation = useMutation<void, Error, string>({
-    mutationFn: async (pinValue: string) => {
-      await apiClient.post(`/tarjetas/${tarjeta.id}/pin`, { pin: pinValue });
-    },
-    onSuccess: (_, pinValue) => {
-      savePinLocal(tarjeta.id, pinValue);
-    },
-  });
-
-  // OCR preview mutation — fires on mount
+  // OCR preview mutation — fires on mount (FLEET-01: ya no envia PIN)
   const ocrPreviewMutation = useMutation<OcrPreviewData, Error, void>({
     mutationFn: async () => {
       const formData = new FormData();
       formData.append("imagen", imageBlob, "ticket.jpg");
       return apiClient.upload<OcrPreviewData>(
-        `/tickets/ocr-preview?tarjetaId=${assignState.tarjetaId}&pin=${encodeURIComponent(pin)}`,
+        `/tickets/ocr-preview?tarjetaId=${assignState.tarjetaId}`,
         formData,
       );
     },
@@ -1084,12 +1059,6 @@ function OcrAndEditStep({
       setSubState("ready");
     },
     onError: (err) => {
-      const is401 = err instanceof ApiError && err.status === 401;
-      if (is401) {
-        toast.error("PIN incorrecto. Comprueba el PIN de tu tarjeta.");
-        onPinRejected();
-        return;
-      }
       toast.error(
         err instanceof ApiError
           ? err.message
@@ -1107,7 +1076,6 @@ function OcrAndEditStep({
 
       const params: Record<string, unknown> = {
         tarjetaId: tarjeta.id,
-        pin,
         categoriaRecurso: assignState.categoria,
         vehiculoId: assignState.vehiculoId,
         // OCR fields
@@ -1134,11 +1102,6 @@ function OcrAndEditStep({
       if (typeof navigator !== "undefined" && navigator.vibrate) {
         navigator.vibrate(50);
       }
-      // Save PIN if "Recordar" was ticked (and wasn't already saved)
-      if (rememberPin && !hasPinLocal(tarjeta.id)) {
-        savePinLocal(tarjeta.id, pin);
-        savePinMutation.mutate(pin);
-      }
       onSaveRecents();
       onSuccess(data, ocrData);
     },
@@ -1146,11 +1109,8 @@ function OcrAndEditStep({
       if (typeof navigator !== "undefined" && navigator.vibrate) {
         navigator.vibrate([50, 50, 50]);
       }
-      const is401 = err instanceof ApiError && err.status === 401;
       setSubmitError(
-        is401
-          ? "PIN incorrecto. Vuelve al paso anterior y comprueba el PIN."
-          : err instanceof ApiError
+        err instanceof ApiError
           ? err.message
           : "Error al enviar el ticket. Inténtalo de nuevo.",
       );
@@ -1499,11 +1459,6 @@ export default function EscanearPage() {
   const [ocrResult, setOcrResult] = useState<OcrResponse | null>(null);
   const [finalOcrData, setFinalOcrData] = useState<EditableOcrData>(emptyEditable());
 
-  // PIN state — stored here so it's available to OcrAndEditStep
-  const [currentPin, setCurrentPin] = useState("");
-  // rememberPin: feature suspendida hasta que se redefina cómo debe funcionar
-  const rememberPin = false;
-
   const [assignState, setAssignState] = useState<AssignState>({
     categoria: "VEHICULO",
     vehiculoId: null,
@@ -1516,7 +1471,7 @@ export default function EscanearPage() {
   const { data: tarjetas = [] } = useQuery<Tarjeta[]>({
     queryKey: ["mis-tarjetas"],
     queryFn: () => apiClient.get<Tarjeta[]>("/tarjetas/mis-tarjetas"),
-    enabled: step === "assignment" || step === "pin" || step === "ocr-edit",
+    enabled: step === "assignment" || step === "ocr-edit",
   });
 
   const selectedTarjeta =
@@ -1541,22 +1496,12 @@ export default function EscanearPage() {
       case "assignment":
         setStep("image-preview");
         break;
-      case "pin":
-        setStep("assignment");
-        break;
       case "ocr-edit":
-        // Back from OCR/edit goes to PIN so user can change it
-        setCurrentPin("");
-        setStep("pin");
+        setStep("assignment");
         break;
       default:
         break;
     }
-  }
-
-  function handlePinConfirmed(pin: string) {
-    setCurrentPin(pin);
-    setStep("ocr-edit");
   }
 
   function handleSaveRecents() {
@@ -1573,7 +1518,6 @@ export default function EscanearPage() {
     setFinalOcrData(emptyEditable());
     setImageBlob(null);
     setPreview("");
-    setCurrentPin("");
     setAssignState({
       categoria: "VEHICULO",
       vehiculoId: null,
@@ -1641,50 +1585,16 @@ export default function EscanearPage() {
             assignState={assignState}
             setAssignState={setAssignState}
             onBack={() => setStep("image-preview")}
-            onContinue={() => setStep("pin")}
+            onContinue={() => setStep("ocr-edit")}
           />
         )}
 
-        {step === "pin" && selectedTarjeta && (
-          <PinEntryStepWrapper
-            tarjeta={selectedTarjeta}
-            previewUrl={preview}
-            onBack={() => setStep("assignment")}
-            onContinue={handlePinConfirmed}
-          />
-        )}
-
-        {/* Fallback: tarjeta not resolved at pin step */}
-        {step === "pin" && !selectedTarjeta && (
-          <div className="flex flex-1 flex-col items-center justify-center gap-4 px-8 text-center">
-            <AlertCircle className="size-10 text-destructive" />
-            <p className="text-sm text-muted-foreground">
-              No se encontró la tarjeta seleccionada. Vuelve al paso anterior.
-            </p>
-            <button
-              onClick={() => setStep("assignment")}
-              className="text-sm font-semibold text-primary"
-            >
-              Volver
-            </button>
-          </div>
-        )}
-
-        {step === "ocr-edit" && imageBlob && selectedTarjeta && currentPin && (
+        {step === "ocr-edit" && imageBlob && selectedTarjeta && (
           <OcrAndEditStep
             imageBlob={imageBlob}
             assignState={assignState}
-            pin={currentPin}
             tarjeta={selectedTarjeta}
-            rememberPin={rememberPin}
-            onPinRejected={() => {
-              setCurrentPin("");
-              setStep("pin");
-            }}
-            onBack={() => {
-              setCurrentPin("");
-              setStep("pin");
-            }}
+            onBack={() => setStep("assignment")}
             onSuccess={(result, ocrData) => {
               setOcrResult(result);
               setFinalOcrData(ocrData);
@@ -1698,94 +1608,3 @@ export default function EscanearPage() {
   );
 }
 
-// ─── PinEntryStepWrapper — handles PIN entry (manual or saved) ───────────────
-// Shows the captured photo preview so the operator confirms what will be sent.
-
-function PinEntryStepWrapper({
-  tarjeta,
-  previewUrl,
-  onBack,
-  onContinue,
-}: {
-  tarjeta: Tarjeta;
-  previewUrl: string;
-  onBack: () => void;
-  onContinue: (pin: string) => void;
-}) {
-  // Por seguridad, el PIN se introduce siempre a mano antes del OCR.
-  // No usamos PIN guardado aquí — solo es accesible via "Ver PIN" en la pantalla de tarjeta.
-  const [pin, setPin] = useState("");
-  const canContinue = pin.length === 4;
-
-  function handleContinue() {
-    if (!canContinue) return;
-    onContinue(pin);
-  }
-
-  return (
-    <div className="flex flex-1 flex-col overflow-y-auto px-4 py-5">
-      {/* Photo preview — what will be sent to OCR */}
-      {previewUrl && (
-        <div className="mb-4 overflow-hidden rounded-2xl border border-border bg-card shadow-sm">
-          <img
-            src={previewUrl}
-            alt="Ticket capturado"
-            className="h-40 w-full object-cover"
-          />
-          <p className="px-3 py-2 text-center text-xs text-muted-foreground">
-            Esto es lo que se enviará al OCR
-          </p>
-        </div>
-      )}
-
-      {/* Card info */}
-      <div className="mb-5 flex items-center gap-3 rounded-2xl border border-border bg-card p-4 shadow-sm">
-        <div className="flex size-11 items-center justify-center rounded-xl bg-primary/10">
-          <CreditCard className="size-5 text-primary" />
-        </div>
-        <div>
-          <p className="text-sm font-semibold text-foreground">
-            {tarjeta.alias ?? `Tarjeta ${tarjeta.proveedor ?? ""}`}
-          </p>
-          <p className="text-xs text-muted-foreground tracking-widest">
-            **** {tarjeta.numeroTarjetaUltimos4}
-          </p>
-        </div>
-      </div>
-
-      <div className="flex flex-col items-center gap-4 py-4">
-        <p className="text-lg font-bold text-foreground">PIN de la tarjeta</p>
-        <p className="text-sm text-muted-foreground text-center">
-          Introduce los 4 dígitos del PIN para continuar.
-        </p>
-
-        <PinInput
-          value={pin}
-          onChange={setPin}
-          disabled={false}
-          error={false}
-        />
-      </div>
-
-      {/* Actions */}
-      <div className="flex gap-3 pt-4">
-        <button
-          onClick={onBack}
-          className="flex h-12 flex-1 items-center justify-center rounded-xl border border-border text-sm font-semibold text-foreground transition-colors hover:bg-muted active:scale-[0.98]"
-        >
-          Atrás
-        </button>
-        <button
-          onClick={handleContinue}
-          disabled={!canContinue}
-          className={cn(
-            "flex h-12 flex-[2] items-center justify-center rounded-xl bg-primary text-sm font-bold text-primary-foreground shadow-md shadow-primary/30",
-            "transition-all hover:bg-primary/90 active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-50",
-          )}
-        >
-          Continuar
-        </button>
-      </div>
-    </div>
-  );
-}
