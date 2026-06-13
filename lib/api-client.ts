@@ -7,15 +7,49 @@ const BASE_URL =
   process.env.NEXT_PUBLIC_API_URL ?? "https://bills-api.z-innova.com";
 
 // ── Error class ───────────────────────────────────────────────────────────────
+// .message es SIEMPRE legible para no-tecnicos (apto para mostrar en toasts).
+// .technicalMessage preserva el original del backend/HTTP para depurar.
+// .status es el codigo HTTP (0 = fallo de red, 1 = error desconocido).
 
 export class ApiError extends Error {
+  public readonly technicalMessage: string;
   constructor(
     public readonly status: number,
-    message: string,
+    technicalMessage: string,
   ) {
-    super(message);
+    super(friendlyMessage(status, technicalMessage));
     this.name = "ApiError";
+    this.technicalMessage = technicalMessage;
   }
+}
+
+// Traduce un (status, mensaje del backend) en un mensaje apto para un usuario
+// no tecnico. Si el backend ya manda un mensaje de negocio razonable (corto
+// y sin trazas), lo respeta. Si no, mapea por codigo HTTP.
+function friendlyMessage(status: number, backendMessage: string): string {
+  const msg = (backendMessage ?? "").trim();
+  const looksTechnical =
+    !msg ||
+    msg.length > 200 ||
+    msg.startsWith("HTTP ") ||
+    /exception|stacktrace|nullpointer|sqlexception/i.test(msg) ||
+    /^error\s+interno/i.test(msg) ||
+    /^internal\s+server\s+error/i.test(msg);
+
+  if (!looksTechnical) return msg;
+
+  if (status === 0) return "Sin conexion. Comprueba tu internet e intentalo de nuevo.";
+  if (status === 400) return "Hay un dato incorrecto. Revisa el formulario e intentalo otra vez.";
+  if (status === 401) return "Tu sesion ha caducado. Vuelve a iniciar sesion.";
+  if (status === 403) return "No tienes permisos para hacer esto.";
+  if (status === 404) return "No encontramos lo que buscabas.";
+  if (status === 409) return "Ya existe un registro con esos datos.";
+  if (status === 413) return "El archivo es demasiado grande.";
+  if (status === 422) return "Algunos datos no son validos. Revisalos.";
+  if (status === 429) return "Estamos recibiendo demasiadas peticiones. Espera unos segundos.";
+  if (status >= 500) return "Algo ha fallado en el servidor. Intentalo de nuevo en unos segundos.";
+
+  return "Ha ocurrido un error inesperado. Si persiste, avisa al administrador.";
 }
 
 // ── Token helpers (localStorage — SSR safe, persiste al cerrar la PWA) ───────
@@ -142,7 +176,15 @@ async function request<T>(
   const headers = new Headers(init.headers);
   if (accessToken) headers.set("Authorization", `Bearer ${accessToken}`);
 
-  const res = await fetch(url, { ...init, headers });
+  // Capturamos el fallo de red para devolver siempre un ApiError. Sin esto
+  // el componente recibiria un TypeError opaco ("Failed to fetch") y el
+  // toast mostraria texto tecnico.
+  let res: Response;
+  try {
+    res = await fetch(url, { ...init, headers });
+  } catch (networkErr) {
+    throw new ApiError(0, networkErr instanceof Error ? networkErr.message : "Network error");
+  }
 
   if (res.status === 401 && retry) {
     // Attempt token refresh once
