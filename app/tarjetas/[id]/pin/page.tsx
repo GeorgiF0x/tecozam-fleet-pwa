@@ -186,6 +186,9 @@ export default function PinPage() {
         deviceName: navigator.userAgent.slice(0, 80),
       });
       toast.success("Biometría registrada. Ya puedes verificar tu PIN con la huella.");
+      // Refrescamos /auth/campo/me para que webauthnEnabled pase a true y el
+      // boton "Ver con biometria" aparezca sin recargar la pagina.
+      queryClient.invalidateQueries({ queryKey: ["me"] });
     } catch (err) {
       const msg = err instanceof ApiError
         ? err.message
@@ -284,11 +287,27 @@ export default function PinPage() {
             </button>
           )}
 
-          {(!biometricAvailable || !me?.webauthnEnabled) && (
+          {/* Caso 1: el dispositivo no tiene biometria fisica. Solo password. */}
+          {!biometricAvailable && (
             <div className="flex items-center gap-2 rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-800 dark:border-amber-700 dark:bg-amber-950 dark:text-amber-300">
               <AlertCircle className="size-4 shrink-0" />
               Tu dispositivo no soporta biometría. Usa tu contraseña.
             </div>
+          )}
+
+          {/* Caso 2: el dispositivo tiene biometria pero el usuario AUN no la
+              ha activado en este movil. Mostramos un boton PRINCIPAL para
+              activarla — antes solo aparecia como link minusculo y solo cuando
+              ya estaba activada, por lo que un usuario nuevo nunca lo veia. */}
+          {biometricAvailable && !me?.webauthnEnabled && (
+            <button
+              type="button"
+              onClick={enrolBiometric}
+              className="flex w-full items-center justify-center gap-2 rounded-lg border border-primary/40 bg-primary/10 px-4 py-3 font-semibold text-primary transition hover:bg-primary/20"
+            >
+              <Fingerprint className="size-5" />
+              Activar biometría en este dispositivo
+            </button>
           )}
 
           <button
@@ -300,13 +319,14 @@ export default function PinPage() {
             Usar contraseña
           </button>
 
+          {/* Re-enrolar (cambiar de dispositivo). Solo cuando ya tiene credencial. */}
           {me?.webauthnEnabled && biometricAvailable && (
             <button
               type="button"
               onClick={enrolBiometric}
               className="w-full pt-2 text-xs text-muted-foreground underline hover:text-foreground"
             >
-              ¿Es la primera vez? Registrar biometría
+              Cambiar el dispositivo de biometría
             </button>
           )}
         </div>
