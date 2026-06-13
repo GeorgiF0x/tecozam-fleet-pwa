@@ -319,13 +319,16 @@ export default function PinPage() {
             Usar contraseña
           </button>
 
-          {/* Re-enrolar (cambiar de dispositivo). Solo cuando ya tiene credencial. */}
+          {/* Re-enrolar (cambiar de dispositivo). Solo cuando ya tiene credencial.
+              Antes era un link minusculo subrayado y casi no se veia — pasa a
+              boton secundario con borde dashed e icono. */}
           {me?.webauthnEnabled && biometricAvailable && (
             <button
               type="button"
               onClick={enrolBiometric}
-              className="w-full pt-2 text-xs text-muted-foreground underline hover:text-foreground"
+              className="flex w-full items-center justify-center gap-2 rounded-lg border border-dashed border-border bg-background px-4 py-2.5 text-sm font-medium text-muted-foreground transition hover:border-primary hover:bg-primary/5 hover:text-primary"
             >
+              <Fingerprint className="size-4" />
               Cambiar el dispositivo de biometría
             </button>
           )}
