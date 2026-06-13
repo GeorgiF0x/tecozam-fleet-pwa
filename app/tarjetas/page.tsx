@@ -2,10 +2,9 @@
 
 import Link from "next/link";
 import { useQuery } from "@tanstack/react-query";
-import { CreditCard, Flame, Droplets, Leaf, Lock, LockOpen, AlertCircle, Loader2, Eye } from "lucide-react";
+import { CreditCard, Flame, Droplets, Leaf, LockOpen, AlertCircle, Loader2, Eye } from "lucide-react";
 import { MobileShell } from "@/components/layout/mobile-shell";
 import { apiClient } from "@/lib/api-client";
-import { cn } from "@/lib/utils";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -79,38 +78,28 @@ function TarjetaCard({ tarjeta }: { tarjeta: Tarjeta }) {
       </div>
 
       {/* PIN actions */}
-      <div className="grid grid-cols-2 gap-2">
+      {tarjeta.tienePinGuardado ? (
+        // PIN ya guardado: solo "Ver PIN" a ancho completo.
+        // El "Cambiar PIN" se quitó temporalmente: la pantalla /pin no soporta
+        // todavía el flujo de re-guardar sobre uno existente sin confundir al
+        // usuario. Volverá cuando se implemente como reauth + sobrescribir.
         <Link
           href={`/tarjetas/${tarjeta.id}/pin`}
-          className={cn(
-            "flex h-10 items-center justify-center gap-1.5 rounded-lg border text-sm font-semibold transition-colors active:scale-[0.98]",
-            tarjeta.tienePinGuardado
-              ? "border-success/40 bg-success/10 text-success hover:bg-success/20"
-              : "border-primary/40 bg-primary/10 text-primary hover:bg-primary/20",
-          )}
+          className="flex h-10 items-center justify-center gap-1.5 rounded-lg border border-success/40 bg-success/10 text-sm font-semibold text-success transition-colors hover:bg-success/20 active:scale-[0.98]"
         >
-          {tarjeta.tienePinGuardado ? (
-            <>
-              <Lock className="size-3.5" />
-              Cambiar PIN
-            </>
-          ) : (
-            <>
-              <LockOpen className="size-3.5" />
-              Guardar PIN
-            </>
-          )}
+          <Eye className="size-3.5" />
+          Ver PIN
         </Link>
-
-        {tarjeta.tienePinGuardado ? (
+      ) : (
+        // Sin PIN: "Guardar PIN" + estado deshabilitado "Sin PIN".
+        <div className="grid grid-cols-2 gap-2">
           <Link
             href={`/tarjetas/${tarjeta.id}/pin`}
-            className="flex h-10 items-center justify-center gap-1.5 rounded-lg border border-border bg-muted/50 text-sm font-semibold text-foreground transition-colors hover:bg-muted active:scale-[0.98]"
+            className="flex h-10 items-center justify-center gap-1.5 rounded-lg border border-primary/40 bg-primary/10 text-sm font-semibold text-primary transition-colors hover:bg-primary/20 active:scale-[0.98]"
           >
-            <Eye className="size-3.5" />
-            Ver PIN
+            <LockOpen className="size-3.5" />
+            Guardar PIN
           </Link>
-        ) : (
           <div
             className="flex h-10 items-center justify-center gap-1.5 rounded-lg border border-border bg-muted/30 text-xs text-muted-foreground"
             title="Primero guarda el PIN para poder consultarlo"
@@ -118,8 +107,8 @@ function TarjetaCard({ tarjeta }: { tarjeta: Tarjeta }) {
             <Eye className="size-3.5 opacity-50" />
             Sin PIN
           </div>
-        )}
-      </div>
+        </div>
+      )}
     </div>
   );
 }
