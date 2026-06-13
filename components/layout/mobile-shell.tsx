@@ -13,6 +13,7 @@ import {
 import { cn } from "@/lib/utils";
 import { useQuery } from "@tanstack/react-query";
 import { apiClient } from "@/lib/api-client";
+import { useAuth } from "@/providers/auth-provider";
 import Image from "next/image";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -56,10 +57,12 @@ function usePageTitle(pathname: string): string {
 // ─── Alert badge query ────────────────────────────────────────────────────────
 
 function useAlertCount(): number {
+  const { user } = useAuth();
   const { data } = useQuery<AlertasCount[] | AlertasCount>({
     queryKey: ["alertas-count"],
     queryFn: () => apiClient.get("/alertas/mis-pendientes"),
     staleTime: 30_000,
+    enabled: !!user, // BILLS-09: solo tras autenticación
   });
 
   if (!data) return 0;

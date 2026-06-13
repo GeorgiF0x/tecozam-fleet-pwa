@@ -144,20 +144,27 @@ export default function HomePage() {
 
   // ── Queries ──────────────────────────────────────────────────────────────
 
+  // BILLS-09: NO disparar queries sin user — el guard del auth-provider redirige
+  // a /login pero React renderiza esta página antes y dispararía 403 inmediatos.
+  const isReady = !!user;
+
   const { data: alertas = [], isLoading: alertasLoading } = useQuery<Alerta[]>({
     queryKey: ["alertas-pendientes"],
     queryFn: () => apiClient.get<Alerta[]>("/alertas/mis-pendientes"),
     staleTime: 30_000,
+    enabled: isReady,
   });
 
   const { data: tickets = [], isLoading: ticketsLoading } = useQuery<TicketAPI[]>({
     queryKey: ["tickets-home"],
     queryFn: () => apiClient.get<TicketAPI[]>("/tickets/mis-tickets"),
+    enabled: isReady,
   });
 
   const { data: prestamos = [] } = useQuery<{ id: number; estado: string }[]>({
     queryKey: ["prestamos-home"],
     queryFn: () => apiClient.get<{ id: number; estado: string }[]>("/prestamos/mis-prestamos"),
+    enabled: isReady,
   });
 
   const prestamosActivos = prestamos.filter(

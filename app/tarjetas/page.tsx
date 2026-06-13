@@ -1,11 +1,9 @@
 "use client";
 
-import { useState } from "react";
 import Link from "next/link";
 import { useQuery } from "@tanstack/react-query";
 import { CreditCard, Flame, Droplets, Leaf, Lock, LockOpen, AlertCircle, Loader2, Eye } from "lucide-react";
 import { MobileShell } from "@/components/layout/mobile-shell";
-import { VerPinDemoSheet } from "@/components/ver-pin-demo-sheet";
 import { apiClient } from "@/lib/api-client";
 import { cn } from "@/lib/utils";
 
@@ -42,8 +40,6 @@ function proveedorColor(proveedor: string): string {
 // ─── Card ─────────────────────────────────────────────────────────────────────
 
 function TarjetaCard({ tarjeta }: { tarjeta: Tarjeta }) {
-  const [verPinOpen, setVerPinOpen] = useState(false);
-
   const Icon = proveedorIcon(tarjeta.proveedor);
   const color = proveedorColor(tarjeta.proveedor);
   const name = tarjeta.alias ?? `Tarjeta ${tarjeta.proveedor}`;
@@ -106,20 +102,24 @@ function TarjetaCard({ tarjeta }: { tarjeta: Tarjeta }) {
           )}
         </Link>
 
-        <button
-          onClick={() => setVerPinOpen(true)}
-          className="flex h-10 items-center justify-center gap-1.5 rounded-lg border border-border bg-muted/50 text-sm font-semibold text-foreground transition-colors hover:bg-muted active:scale-[0.98]"
-        >
-          <Eye className="size-3.5" />
-          Ver PIN
-        </button>
+        {tarjeta.tienePinGuardado ? (
+          <Link
+            href={`/tarjetas/${tarjeta.id}/pin`}
+            className="flex h-10 items-center justify-center gap-1.5 rounded-lg border border-border bg-muted/50 text-sm font-semibold text-foreground transition-colors hover:bg-muted active:scale-[0.98]"
+          >
+            <Eye className="size-3.5" />
+            Ver PIN
+          </Link>
+        ) : (
+          <div
+            className="flex h-10 items-center justify-center gap-1.5 rounded-lg border border-border bg-muted/30 text-xs text-muted-foreground"
+            title="Primero guarda el PIN para poder consultarlo"
+          >
+            <Eye className="size-3.5 opacity-50" />
+            Sin PIN
+          </div>
+        )}
       </div>
-
-      <VerPinDemoSheet
-        tarjeta={tarjeta}
-        open={verPinOpen}
-        onClose={() => setVerPinOpen(false)}
-      />
     </div>
   );
 }

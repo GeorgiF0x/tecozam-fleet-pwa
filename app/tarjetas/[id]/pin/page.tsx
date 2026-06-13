@@ -1,23 +1,40 @@
 "use client";
 
+// ─── /tarjetas/[id]/pin — Reescritura SDD pin-biometric-view ─────────────────
+// Flujo:
+//   1) Carga `tarjeta` y `usuarioCampoMe` (incluye flag webauthnEnabled).
+//   2) Si la tarjeta NO tiene PIN guardado → modo "set": el operario lo guarda
+//      con su flujo PinInput. Al éxito, redirige a /tarjetas.
+//   3) Si ya tiene PIN → modo "reveal":
+//        - Botón "Ver con biometría" → flujo WebAuthn real (challenge backend).
+//        - Botón "Usar contraseña" → fallback con el password del usuario.
+//        - Al éxito, muestra <PinRevealCard> con countdown 30s.
+//   4) NUNCA persiste el PIN en sessionStorage/localStorage (vulnerabilidad
+//      anterior eliminada).
+
 import { useState, useEffect } from "react";
-import { useParams, useRouter, useSearchParams } from "next/navigation";
-import { useMutation, useQuery } from "@tanstack/react-query";
+import { useParams, useRouter } from "next/navigation";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   ArrowLeft,
+  Eye,
+  EyeOff,
   Fingerprint,
+  KeyRound,
   AlertCircle,
-  CheckCircle,
   Loader2,
   ShieldCheck,
-  Trash2,
-  KeyRound,
 } from "lucide-react";
 import { toast } from "sonner";
 import { PinInput } from "@/components/shared/pin-input";
+import { PinRevealCard, PinRevealPending } from "@/components/pin-reveal-card";
 import { apiClient, ApiError } from "@/lib/api-client";
-import { savePinLocal, removePinLocal } from "@/lib/pin-storage";
-import { cn } from "@/lib/utils";
+import {
+  parseCreationOptions,
+  parseRequestOptions,
+  credentialToJson,
+  isPlatformAuthenticatorAvailable,
+} from "@/lib/webauthn";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -29,519 +46,328 @@ interface Tarjeta {
   tienePinGuardado: boolean;
 }
 
-type BiometricState = "idle" | "pending" | "passed" | "failed" | "cancelled";
-type PinMode = "set" | "change";
-
-// ─── Helpers ─────────────────────────────────────────────────────────────────
-
-async function checkBiometricAvailable(): Promise<boolean> {
-  if (typeof window === "undefined" || !("PublicKeyCredential" in window)) {
-    return false;
-  }
-  try {
-    return await PublicKeyCredential.isUserVerifyingPlatformAuthenticatorAvailable();
-  } catch {
-    return false;
-  }
+interface MeResponse {
+  id: number;
+  username: string;
+  webauthnEnabled: boolean;
 }
 
-async function requestBiometric(): Promise<void> {
-  const challenge = crypto.getRandomValues(new Uint8Array(32));
-  await navigator.credentials.get({
-    publicKey: {
-      challenge,
-      userVerification: "required",
-      timeout: 30_000,
-    },
-  });
-}
+type RevealMode = "idle" | "biometria-loading" | "password-prompt" | "password-loading";
 
 // ─── Page ─────────────────────────────────────────────────────────────────────
 
 export default function PinPage() {
   const params = useParams<{ id: string }>();
   const router = useRouter();
-  const searchParams = useSearchParams();
+  const queryClient = useQueryClient();
+
   const tarjetaIdStr = params.id;
-  const tarjetaId = Number(tarjetaIdStr);
 
-  // Optionally accept ?mode=change to force change mode even if no pin saved
-  const forcedMode = searchParams.get("mode") as PinMode | null;
+  // ── Data ──────────────────────────────────────────────────────────────────
+  // Usamos /mis-tarjetas (no /tarjetas/{id}) porque solo MiTarjetaDTO incluye
+  // tienePinGuardado y numeroTarjetaUltimos4 — el endpoint admin no.
+  const { data: misTarjetas, isLoading: loadingTarjeta } = useQuery<Tarjeta[]>({
+    queryKey: ["mis-tarjetas"],
+    queryFn: () => apiClient.get<Tarjeta[]>("/tarjetas/mis-tarjetas"),
+  });
+  const tarjeta = misTarjetas?.find((t) => String(t.id) === tarjetaIdStr);
 
-  // Fetch tarjeta to know if it has a saved PIN
-  const { data: tarjeta, isLoading: loadingTarjeta } = useQuery<Tarjeta>({
-    queryKey: ["tarjeta", tarjetaIdStr],
-    queryFn: () => apiClient.get<Tarjeta>(`/tarjetas/${tarjetaIdStr}`),
+  const { data: me } = useQuery<MeResponse>({
+    queryKey: ["me"],
+    queryFn: () => apiClient.get<MeResponse>("/auth/campo/me"),
   });
 
   const hasSavedPin = tarjeta?.tienePinGuardado ?? false;
-  const showBiometricFlow = hasSavedPin && forcedMode !== "set";
 
+  // ── State ─────────────────────────────────────────────────────────────────
   const [biometricAvailable, setBiometricAvailable] = useState(false);
-  const [biometricState, setBiometricState] = useState<BiometricState>("idle");
-
-  const [pinMode, setPinMode] = useState<PinMode>("set");
-  const [pin, setPin] = useState("");
-  const [error, setError] = useState<string | null>(null);
-  const [success, setSuccess] = useState(false);
+  const [setPinValue, setSetPinValue] = useState("");
+  const [revealedPin, setRevealedPin] = useState<string | null>(null);
+  const [revealMode, setRevealMode] = useState<RevealMode>("idle");
+  const [passwordValue, setPasswordValue] = useState("");
+  const [showPassword, setShowPassword] = useState(false);
 
   useEffect(() => {
-    checkBiometricAvailable().then(setBiometricAvailable);
+    isPlatformAuthenticatorAvailable().then(setBiometricAvailable);
   }, []);
 
-  // When tarjeta loads and has saved PIN → auto-trigger biometric
-  useEffect(() => {
-    if (tarjeta && showBiometricFlow && biometricState === "idle") {
-      handleBiometricVerify();
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tarjeta?.tienePinGuardado]);
-
-  // ── Save PIN mutation ─────────────────────────────────────────────────────
-
+  // ── Save PIN (modo "set") ─────────────────────────────────────────────────
   const saveMutation = useMutation<void, Error, string>({
-    mutationFn: async (pinValue: string) => {
-      await apiClient.post(`/tarjetas/${tarjetaIdStr}/pin`, { pin: pinValue });
+    mutationFn: async (pin: string) => {
+      await apiClient.post(`/tarjetas/${tarjetaIdStr}/pin`, { pin });
     },
-    onSuccess: (_, pinValue) => {
-      if (typeof navigator !== "undefined" && navigator.vibrate) {
-        navigator.vibrate(50);
-      }
-      savePinLocal(tarjetaId, pinValue);
-      setSuccess(true);
+    onSuccess: () => {
+      if (typeof navigator !== "undefined" && navigator.vibrate) navigator.vibrate(50);
       toast.success("PIN guardado correctamente");
+      queryClient.invalidateQueries({ queryKey: ["tarjeta", tarjetaIdStr] });
+      queryClient.invalidateQueries({ queryKey: ["mis-tarjetas"] });
       setTimeout(() => router.push("/tarjetas"), 1500);
     },
     onError: (err) => {
-      const message =
-        err instanceof ApiError && err.status === 401
-          ? "PIN incorrecto. Inténtalo de nuevo."
-          : err instanceof ApiError
-          ? err.message
-          : "Error al guardar el PIN";
-      setError(message);
-      if (typeof navigator !== "undefined" && navigator.vibrate) {
-        navigator.vibrate([50, 50, 50]);
-      }
+      toast.error(
+        err instanceof ApiError ? err.message : "No se pudo guardar el PIN",
+      );
     },
   });
 
-  // ── Remove PIN mutation ───────────────────────────────────────────────────
-
-  const removeMutation = useMutation<void, Error, void>({
-    mutationFn: async () => {
-      // POST with empty pin to clear, or DELETE if backend supports it
-      await apiClient.post(`/tarjetas/${tarjetaIdStr}/pin`, { pin: "" });
-    },
-    onSuccess: () => {
-      removePinLocal(tarjetaId);
-      toast.success("PIN eliminado");
-      router.push("/tarjetas");
-    },
-    onError: (err) => {
-      // If backend doesn't accept empty pin, just clear sessionStorage
-      removePinLocal(tarjetaId);
-      if (err instanceof ApiError && err.status !== 400) {
-        toast.error(
-          err instanceof ApiError ? err.message : "Error al eliminar el PIN",
-        );
-      } else {
-        // Treat as success — sessionStorage cleared
-        toast.success("PIN eliminado localmente");
-        router.push("/tarjetas");
-      }
-    },
-  });
-
-  // ── Biometric ────────────────────────────────────────────────────────────
-
-  async function handleBiometricVerify() {
-    setBiometricState("pending");
-    setError(null);
+  // ── Reveal con biometría ──────────────────────────────────────────────────
+  async function revealWithBiometric() {
+    setRevealMode("biometria-loading");
     try {
-      await requestBiometric();
-      setBiometricState("passed");
-    } catch {
-      setBiometricState("cancelled");
+      const start = await apiClient.post<{
+        token: string;
+        publicKeyCredentialRequestOptions: string;
+      }>("/webauthn/auth/options", {});
+      const opts = parseRequestOptions(start.publicKeyCredentialRequestOptions);
+      const cred = (await navigator.credentials.get(opts)) as PublicKeyCredential | null;
+      if (!cred) throw new Error("No se obtuvo la credencial biométrica");
+
+      const reveal = await apiClient.post<{ pin: string; expiresIn: number }>(
+        `/tarjetas/${tarjetaIdStr}/pin/reveal`,
+        {
+          assertion: {
+            token: start.token,
+            credentialJson: credentialToJson(cred),
+          },
+        },
+      );
+      setRevealedPin(reveal.pin);
+      setRevealMode("idle");
+    } catch (err) {
+      setRevealMode("idle");
+      const msg = err instanceof ApiError
+        ? err.message
+        : err instanceof Error
+          ? err.message
+          : "Verificación biométrica fallida";
+      toast.error(msg);
     }
   }
 
-  // ── Submit PIN ────────────────────────────────────────────────────────────
-
-  function handleSubmit() {
-    setError(null);
-    if (pin.length < 4) {
-      setError("Introduce los 4 dígitos del PIN");
+  // ── Reveal con password ───────────────────────────────────────────────────
+  async function revealWithPassword() {
+    if (!passwordValue) {
+      toast.error("Introduce tu contraseña");
       return;
     }
-    saveMutation.mutate(pin);
+    setRevealMode("password-loading");
+    try {
+      const reveal = await apiClient.post<{ pin: string; expiresIn: number }>(
+        `/tarjetas/${tarjetaIdStr}/pin/reveal`,
+        { password: passwordValue },
+      );
+      setRevealedPin(reveal.pin);
+      setPasswordValue("");
+      setRevealMode("idle");
+    } catch (err) {
+      setRevealMode("password-prompt");
+      const msg = err instanceof ApiError
+        ? err.message
+        : err instanceof Error
+          ? err.message
+          : "Contraseña incorrecta";
+      toast.error(msg);
+    }
   }
 
-  // ─── Loading state ────────────────────────────────────────────────────────
+  // ── Enrolar credencial biométrica (1ª vez) ────────────────────────────────
+  async function enrolBiometric() {
+    try {
+      const start = await apiClient.post<{
+        token: string;
+        publicKeyCredentialCreationOptions: string;
+      }>("/webauthn/register/options", {});
+      const opts = parseCreationOptions(start.publicKeyCredentialCreationOptions);
+      const cred = (await navigator.credentials.create(opts)) as PublicKeyCredential | null;
+      if (!cred) throw new Error("Enrolamiento cancelado");
+      await apiClient.post("/webauthn/register/verify", {
+        token: start.token,
+        credentialJson: credentialToJson(cred),
+        deviceName: navigator.userAgent.slice(0, 80),
+      });
+      toast.success("Biometría registrada. Ya puedes verificar tu PIN con la huella.");
+    } catch (err) {
+      const msg = err instanceof ApiError
+        ? err.message
+        : err instanceof Error
+          ? err.message
+          : "Enrolamiento fallido";
+      toast.error(msg);
+    }
+  }
 
+  // ── Render ────────────────────────────────────────────────────────────────
   if (loadingTarjeta) {
     return (
-      <div className="flex min-h-screen flex-col items-center justify-center bg-background">
+      <div className="flex min-h-[40vh] items-center justify-center">
         <Loader2 className="size-8 animate-spin text-primary" />
       </div>
     );
   }
-
-  // ─── Success view ─────────────────────────────────────────────────────────
-
-  if (success) {
+  if (!tarjeta) {
     return (
-      <div className="flex min-h-screen flex-col items-center justify-center bg-background px-6">
-        <div className="flex flex-col items-center gap-4 text-center">
-          <div className="flex size-20 items-center justify-center rounded-full bg-success/15 border border-success/30">
-            <CheckCircle className="size-10 text-success" />
-          </div>
-          <p className="text-xl font-bold text-foreground">PIN guardado</p>
-          <p className="text-sm text-muted-foreground">
-            El PIN ha sido guardado correctamente.
-          </p>
-        </div>
+      <div className="p-6">
+        <p className="text-sm text-destructive">Tarjeta no encontrada.</p>
       </div>
     );
   }
 
-  // ─── Card header ─────────────────────────────────────────────────────────
-
-  const cardLabel = tarjeta
-    ? (tarjeta.alias ?? `Tarjeta ${tarjeta.proveedor ?? ""}`)
-    : `Tarjeta #${tarjetaIdStr}`;
-  const cardLast4 = tarjeta?.numeroTarjetaUltimos4 ?? "????";
-
-  // ─── Branch: tarjeta HAS saved PIN → biometric gate ──────────────────────
-
-  if (showBiometricFlow) {
-    // 1. Pending / requesting biometric
-    if (biometricState === "idle" || biometricState === "pending") {
-      return (
-        <div className="flex min-h-screen flex-col bg-background">
-          <div className="mx-auto w-full max-w-[480px]">
-            <PageHeader title="PIN de tarjeta" />
-            <div className="flex flex-col items-center gap-6 px-6 pt-16 pb-6 text-center">
-              <div className="flex size-20 items-center justify-center rounded-full bg-primary/10">
-                <Fingerprint className="size-10 text-primary animate-pulse" />
-              </div>
-              <p className="text-base font-semibold text-foreground">
-                Verificando identidad...
-              </p>
-              <p className="text-sm text-muted-foreground">
-                Usa la biometría del dispositivo para acceder al PIN guardado.
-              </p>
-              {biometricState === "pending" && (
-                <Loader2 className="size-6 animate-spin text-primary" />
-              )}
-            </div>
-          </div>
-        </div>
-      );
-    }
-
-    // 2. Biometric failed / cancelled
-    if (biometricState === "failed" || biometricState === "cancelled") {
-      return (
-        <div className="flex min-h-screen flex-col bg-background">
-          <div className="mx-auto w-full max-w-[480px]">
-            <PageHeader title="PIN de tarjeta" />
-            <div className="flex flex-col items-center gap-6 px-6 pt-12 pb-6 text-center">
-              <div className="flex size-20 items-center justify-center rounded-full bg-destructive/10">
-                <AlertCircle className="size-10 text-destructive" />
-              </div>
-              <div>
-                <p className="text-base font-semibold text-foreground">
-                  Verificación cancelada
-                </p>
-                <p className="mt-1 text-sm text-muted-foreground">
-                  No se pudo verificar tu identidad con biometría.
-                </p>
-              </div>
-              <div className="flex w-full flex-col gap-3">
-                <button
-                  onClick={handleBiometricVerify}
-                  className="flex h-12 w-full items-center justify-center gap-2 rounded-xl bg-primary text-sm font-bold text-primary-foreground shadow-md shadow-primary/30 transition-all hover:bg-primary/90 active:scale-[0.98] disabled:opacity-50"
-                >
-                  <Fingerprint className="size-4" />
-                  Reintentar
-                </button>
-                <button
-                  onClick={() => router.back()}
-                  className="flex h-12 w-full items-center justify-center rounded-xl border border-border text-sm font-semibold text-foreground transition-colors hover:bg-muted active:scale-[0.98]"
-                >
-                  Volver
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>
-      );
-    }
-
-    // 3. Biometric passed → show management UI
-    if (biometricState === "passed") {
-      // If user wants to change PIN
-      if (pinMode === "change") {
-        return (
-          <div className="flex min-h-screen flex-col bg-background">
-            <div className="mx-auto w-full max-w-[480px]">
-              <PageHeader title="Cambiar PIN" />
-              <div className="flex flex-col items-center gap-6 px-6 pt-10 pb-6">
-                <CardBadge label={cardLabel} last4={cardLast4} />
-
-                <div className="flex flex-col items-center gap-2 text-center">
-                  <p className="text-lg font-bold text-foreground">Nuevo PIN</p>
-                  <p className="text-sm text-muted-foreground">
-                    Introduce los 4 nuevos dígitos para esta tarjeta.
-                  </p>
-                </div>
-
-                <PinInput
-                  value={pin}
-                  onChange={(v) => {
-                    setPin(v);
-                    if (error) setError(null);
-                  }}
-                  disabled={saveMutation.isPending}
-                  error={!!error}
-                />
-
-                {error && <ErrorBanner message={error} />}
-
-                <button
-                  onClick={handleSubmit}
-                  disabled={pin.length < 4 || saveMutation.isPending}
-                  className={cn(
-                    "flex h-12 w-full items-center justify-center gap-2 rounded-xl bg-primary text-sm font-bold text-primary-foreground shadow-md shadow-primary/30",
-                    "transition-all hover:bg-primary/90 active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-50",
-                  )}
-                >
-                  {saveMutation.isPending && (
-                    <Loader2 className="size-4 animate-spin" />
-                  )}
-                  {saveMutation.isPending ? "Guardando..." : "Guardar nuevo PIN"}
-                </button>
-
-                <button
-                  onClick={() => { setPinMode("set"); setPin(""); setError(null); }}
-                  className="text-sm text-muted-foreground hover:text-foreground transition-colors"
-                >
-                  Cancelar
-                </button>
-              </div>
-            </div>
-          </div>
-        );
-      }
-
-      // Default: show current PIN info + management options
-      return (
-        <div className="flex min-h-screen flex-col bg-background">
-          <div className="mx-auto w-full max-w-[480px]">
-            <PageHeader title="PIN de tarjeta" />
-            <div className="flex flex-col items-center gap-6 px-6 pt-10 pb-6">
-
-              {/* Verified badge */}
-              <div className="flex items-center gap-2 rounded-full bg-success/10 px-4 py-2">
-                <ShieldCheck className="size-4 text-success" />
-                <span className="text-sm font-semibold text-success">
-                  Identidad verificada
-                </span>
-              </div>
-
-              <CardBadge label={cardLabel} last4={cardLast4} />
-
-              {/* PIN display (masked) */}
-              <div className="flex flex-col items-center gap-3 w-full rounded-2xl border border-border bg-card p-5 shadow-sm">
-                <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-                  PIN actual
-                </p>
-                <div className="flex items-center gap-3">
-                  {Array.from({ length: 4 }).map((_, i) => (
-                    <div
-                      key={i}
-                      className="flex size-14 items-center justify-center rounded-xl border-2 border-primary/30 bg-primary/5"
-                    >
-                      <div className="size-3 rounded-full bg-primary/60" />
-                    </div>
-                  ))}
-                </div>
-                <p className="text-xs text-muted-foreground">
-                  El PIN está guardado de forma segura en el servidor
-                </p>
-              </div>
-
-              {/* Actions */}
-              <div className="flex w-full flex-col gap-3">
-                <button
-                  onClick={() => { setPinMode("change"); setPin(""); setError(null); }}
-                  className="flex h-12 w-full items-center justify-center gap-2 rounded-xl bg-primary text-sm font-bold text-primary-foreground shadow-md shadow-primary/30 transition-all hover:bg-primary/90 active:scale-[0.98]"
-                >
-                  <KeyRound className="size-4" />
-                  Cambiar PIN
-                </button>
-
-                <button
-                  onClick={() => {
-                    if (confirm("¿Eliminar el PIN guardado? Tendrás que introducirlo manualmente en cada operación.")) {
-                      removeMutation.mutate();
-                    }
-                  }}
-                  disabled={removeMutation.isPending}
-                  className="flex h-12 w-full items-center justify-center gap-2 rounded-xl border border-destructive/40 bg-destructive/5 text-sm font-semibold text-destructive transition-colors hover:bg-destructive/10 active:scale-[0.98] disabled:opacity-50"
-                >
-                  {removeMutation.isPending ? (
-                    <Loader2 className="size-4 animate-spin" />
-                  ) : (
-                    <Trash2 className="size-4" />
-                  )}
-                  Eliminar PIN guardado
-                </button>
-
-                <button
-                  onClick={() => router.back()}
-                  className="text-sm text-center text-muted-foreground hover:text-foreground transition-colors"
-                >
-                  Volver
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>
-      );
-    }
-  }
-
-  // ─── Branch: tarjeta does NOT have saved PIN → direct input ──────────────
-
   return (
-    <div className="flex min-h-screen flex-col bg-background">
-      <div className="mx-auto w-full max-w-[480px]">
-        <PageHeader title="PIN de tarjeta" />
+    <div className="mx-auto max-w-md space-y-4 p-4">
+      <button
+        type="button"
+        onClick={() => router.back()}
+        className="flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground"
+      >
+        <ArrowLeft className="size-4" /> Volver
+      </button>
 
-        <div className="flex flex-col items-center gap-6 px-6 pt-10 pb-6">
-          <CardBadge label={cardLabel} last4={cardLast4} />
+      <div className="rounded-xl border bg-card p-4">
+        <p className="text-xs text-muted-foreground">Tarjeta</p>
+        <p className="font-mono text-lg">
+          •••• {tarjeta.numeroTarjetaUltimos4}
+        </p>
+        {tarjeta.alias && (
+          <p className="text-xs text-muted-foreground">{tarjeta.alias}</p>
+        )}
+      </div>
 
-          <div className="flex flex-col items-center gap-2 text-center">
-            <p className="text-lg font-bold text-foreground">Introduce tu PIN</p>
-            <p className="text-sm text-muted-foreground">
-              Introduce los 4 dígitos para autorizar el uso de esta tarjeta.
-            </p>
-          </div>
+      {/* ─── Modo SET: guardar PIN por primera vez ──────────────────────── */}
+      {!hasSavedPin && (
+        <div className="space-y-3 rounded-xl border bg-card p-4">
+          <h2 className="flex items-center gap-2 font-semibold">
+            <KeyRound className="size-5 text-primary" /> Guardar PIN de la tarjeta
+          </h2>
+          <p className="text-sm text-muted-foreground">
+            Introduce el PIN de 4 dígitos de tu tarjeta. Solo lo verás luego con
+            verificación biométrica o tu contraseña — no queda guardado en el
+            navegador.
+          </p>
+          <PinInput
+            length={4}
+            value={setPinValue}
+            onChange={(v) => {
+              setSetPinValue(v);
+              if (v.length === 4 && /^\d{4}$/.test(v)) saveMutation.mutate(v);
+            }}
+          />
+          {saveMutation.isPending && <PinRevealPending label="Guardando PIN…" />}
+        </div>
+      )}
 
-          {/* Biometric shortcut if available (but no saved PIN) */}
-          {biometricAvailable && (
-            <>
-              <button
-                onClick={async () => {
-                  try {
-                    await requestBiometric();
-                    if (pin.length === 4) {
-                      saveMutation.mutate(pin);
-                    } else {
-                      toast.info(
-                        "Verificación completada. Introduce el PIN para guardar.",
-                      );
-                    }
-                  } catch {
-                    toast.info("Verificación cancelada.");
-                  }
-                }}
-                disabled={saveMutation.isPending}
-                className="flex items-center gap-2 rounded-xl border border-primary/40 bg-primary/10 px-5 py-3 text-sm font-semibold text-primary transition-colors hover:bg-primary/20 disabled:opacity-60"
-              >
-                <Fingerprint className="size-4" />
-                Usar biometría del dispositivo
-              </button>
+      {/* ─── Modo REVEAL: el PIN ya está guardado ───────────────────────── */}
+      {hasSavedPin && revealedPin && (
+        <PinRevealCard
+          pin={revealedPin}
+          expiresIn={30}
+          onExpire={() => setRevealedPin(null)}
+        />
+      )}
 
-              <div className="flex w-full items-center gap-3">
-                <div className="flex-1 h-px bg-border" />
-                <span className="text-xs text-muted-foreground">
-                  o introduce el PIN
-                </span>
-                <div className="flex-1 h-px bg-border" />
-              </div>
-            </>
+      {hasSavedPin && !revealedPin && revealMode === "idle" && (
+        <div className="space-y-3 rounded-xl border bg-card p-4">
+          <h2 className="flex items-center gap-2 font-semibold">
+            <ShieldCheck className="size-5 text-primary" /> Ver PIN de la tarjeta
+          </h2>
+          <p className="text-sm text-muted-foreground">
+            El PIN se mostrará durante 30 segundos. Elige cómo verificar:
+          </p>
+
+          {me?.webauthnEnabled && biometricAvailable && (
+            <button
+              type="button"
+              onClick={revealWithBiometric}
+              className="flex w-full items-center justify-center gap-2 rounded-lg bg-primary px-4 py-3 font-semibold text-primary-foreground transition hover:opacity-95"
+            >
+              <Fingerprint className="size-5" />
+              Ver con biometría
+            </button>
           )}
 
-          <PinInput
-            value={pin}
-            onChange={(v) => {
-              setPin(v);
-              if (error) setError(null);
-            }}
-            disabled={saveMutation.isPending}
-            error={!!error}
-          />
-
-          {error && <ErrorBanner message={error} />}
+          {(!biometricAvailable || !me?.webauthnEnabled) && (
+            <div className="flex items-center gap-2 rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-800 dark:border-amber-700 dark:bg-amber-950 dark:text-amber-300">
+              <AlertCircle className="size-4 shrink-0" />
+              Tu dispositivo no soporta biometría. Usa tu contraseña.
+            </div>
+          )}
 
           <button
-            onClick={handleSubmit}
-            disabled={pin.length < 4 || saveMutation.isPending}
-            className={cn(
-              "flex h-12 w-full items-center justify-center gap-2 rounded-xl bg-primary text-sm font-bold text-primary-foreground shadow-md shadow-primary/30",
-              "transition-all hover:bg-primary/90 active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-50",
-            )}
+            type="button"
+            onClick={() => setRevealMode("password-prompt")}
+            className="flex w-full items-center justify-center gap-2 rounded-lg border border-border bg-background px-4 py-3 font-medium text-foreground hover:bg-accent"
           >
-            {saveMutation.isPending && (
-              <Loader2 className="size-4 animate-spin" />
-            )}
-            {saveMutation.isPending ? "Guardando..." : "Guardar PIN"}
+            <KeyRound className="size-5" />
+            Usar contraseña
           </button>
 
-          <button
-            onClick={() => router.back()}
-            className="text-sm text-muted-foreground hover:text-foreground transition-colors"
-          >
-            Cancelar
-          </button>
+          {me?.webauthnEnabled && biometricAvailable && (
+            <button
+              type="button"
+              onClick={enrolBiometric}
+              className="w-full pt-2 text-xs text-muted-foreground underline hover:text-foreground"
+            >
+              ¿Es la primera vez? Registrar biometría
+            </button>
+          )}
         </div>
-      </div>
-    </div>
-  );
-}
+      )}
 
-// ─── Shared sub-components ────────────────────────────────────────────────────
+      {hasSavedPin && revealMode === "biometria-loading" && (
+        <PinRevealPending label="Esperando huella/face del dispositivo…" />
+      )}
 
-function PageHeader({ title }: { title: string }) {
-  const router = useRouter();
-  return (
-    <header className="flex items-center gap-3 border-b border-border px-4 py-3">
-      <button
-        onClick={() => router.back()}
-        className="flex size-10 items-center justify-center rounded-full transition-colors hover:bg-muted"
-        aria-label="Volver"
-      >
-        <ArrowLeft className="size-5 text-foreground" />
-      </button>
-      <h1 className="text-base font-bold text-foreground">{title}</h1>
-    </header>
-  );
-}
+      {hasSavedPin && revealMode === "password-prompt" && (
+        <div className="space-y-3 rounded-xl border bg-card p-4">
+          <h2 className="flex items-center gap-2 font-semibold">
+            <KeyRound className="size-5 text-primary" /> Tu contraseña
+          </h2>
+          <div className="relative">
+            <input
+              type={showPassword ? "text" : "password"}
+              value={passwordValue}
+              onChange={(e) => setPasswordValue(e.target.value)}
+              placeholder="Contraseña de tu usuario"
+              className="w-full rounded-lg border border-border bg-background pl-3 pr-10 py-2 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
+              autoFocus
+              onKeyDown={(e) => {
+                if (e.key === "Enter") revealWithPassword();
+              }}
+            />
+            <button
+              type="button"
+              onClick={() => setShowPassword((v) => !v)}
+              className="absolute right-2 top-1/2 -translate-y-1/2 flex size-7 items-center justify-center rounded-md text-muted-foreground hover:text-foreground hover:bg-accent"
+              aria-label={showPassword ? "Ocultar contraseña" : "Mostrar contraseña"}
+              tabIndex={-1}
+            >
+              {showPassword ? <EyeOff className="size-4" /> : <Eye className="size-4" />}
+            </button>
+          </div>
+          <div className="flex gap-2">
+            <button
+              type="button"
+              onClick={() => {
+                setRevealMode("idle");
+                setPasswordValue("");
+              }}
+              className="flex-1 rounded-lg border border-border bg-background px-3 py-2 text-sm hover:bg-accent"
+            >
+              Cancelar
+            </button>
+            <button
+              type="button"
+              onClick={revealWithPassword}
+              className="flex-1 rounded-lg bg-primary px-3 py-2 text-sm font-semibold text-primary-foreground hover:opacity-95"
+            >
+              Verificar
+            </button>
+          </div>
+        </div>
+      )}
 
-function CardBadge({ label, last4 }: { label: string; last4: string }) {
-  return (
-    <div className="flex w-full items-center gap-3 rounded-2xl border border-primary/30 bg-primary/5 px-4 py-3">
-      <div className="flex size-11 shrink-0 items-center justify-center rounded-xl bg-primary/10">
-        <span className="text-lg">💳</span>
-      </div>
-      <div>
-        <p className="text-sm font-semibold text-foreground">{label}</p>
-        <p className="text-xs tracking-widest text-muted-foreground">
-          **** {last4}
-        </p>
-      </div>
-    </div>
-  );
-}
-
-function ErrorBanner({ message }: { message: string }) {
-  return (
-    <div className="flex w-full items-start gap-2 rounded-lg border border-destructive/30 bg-destructive/10 px-3 py-2.5">
-      <AlertCircle className="mt-0.5 size-4 shrink-0 text-destructive" />
-      <p className="text-sm text-destructive">{message}</p>
+      {hasSavedPin && revealMode === "password-loading" && (
+        <PinRevealPending label="Verificando contraseña…" />
+      )}
     </div>
   );
 }

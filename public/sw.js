@@ -1,8 +1,7 @@
 // ─── Tecozam Operarios — Service Worker ──────────────────────────────────────
 // Cache-first for shell assets, network-first for API.
 
-const CACHE_VERSION = "tecozam-fleet-v1";
-const API_ORIGIN = "https://bills-api.z-innova.com";
+const CACHE_VERSION = "tecozam-fleet-v2";
 
 const SHELL = [
   "/",
@@ -52,12 +51,19 @@ self.addEventListener("fetch", (event) => {
   const { request } = event;
   const url = new URL(request.url);
 
-  // Skip non-GET and API requests (always network for API)
+  // Skip non-GET
   if (request.method !== "GET") return;
-  if (url.origin === API_ORIGIN) return;
+  // Skip cualquier petición cross-origin (la API vive en otro host: localhost:8080,
+  // tunnels cloudflare, o el backend de producción). El SW nunca debe cachear API.
+  if (url.origin !== self.location.origin) return;
+  // Skip cualquier path que contenga "/api/" — defensive: cubre proxies/rewrites.
+  if (url.pathname.includes("/api/")) return;
   // Solo cachear http(s); chrome-extension:// y otros esquemas no son soportados
   // por la Cache API y revientan el SW si intentamos hacer cache.put.
   if (url.protocol !== "http:" && url.protocol !== "https:") return;
+  // Skip los chunks de Next.js — sus hashes cambian en cada build y devolver
+  // cache stale dispara ChunkLoadError. Que sean siempre network.
+  if (url.pathname.startsWith("/_next/")) return;
 
   // Network-first for navigation
   if (request.mode === "navigate") {
