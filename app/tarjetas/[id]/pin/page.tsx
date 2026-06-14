@@ -319,14 +319,12 @@ export default function PinPage() {
             Usar contraseña
           </button>
 
-          {/* Re-enrolar / anadir este dispositivo. Solo cuando ya tiene credencial.
-              Copy unificado con el caso de primera vez: "Activar biometria en
-              este dispositivo". Cubre los dos escenarios reales del usuario:
-              (a) cambio de movil: la nueva pasa a ser la activa (UNIQUE filtrado
-                  en BD sobreescribe la anterior — la vieja queda muerta).
-              (b) anadir este dispositivo cuando ya enrolaste en otro:
-                  desde el punto de vista del usuario "activa la biometria de
-                  este movil/portatil". El verbo "cambiar" era confuso. */}
+          {/* Re-enrolar / mover biometria a este dispositivo. Solo cuando ya
+              tiene credencial. Modelo "una credencial activa por usuario":
+              al darle, el backend hace soft-delete de la anterior y guarda
+              esta. UX: verbo "Cambiar" para distinguir del primer enrolamiento
+              ("Activar"), porque sustituyes una cosa por otra en lugar de
+              encender algo desde cero. */}
           {me?.webauthnEnabled && biometricAvailable && (
             <button
               type="button"
@@ -334,7 +332,7 @@ export default function PinPage() {
               className="flex w-full items-center justify-center gap-2 rounded-lg border border-dashed border-border bg-background px-4 py-2.5 text-sm font-medium text-muted-foreground transition hover:border-primary hover:bg-primary/5 hover:text-primary"
             >
               <Fingerprint className="size-4" />
-              Activar biometría en este dispositivo
+              Cambiar biometría a este dispositivo
             </button>
           )}
         </div>
