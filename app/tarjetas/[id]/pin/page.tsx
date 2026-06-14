@@ -319,9 +319,14 @@ export default function PinPage() {
             Usar contraseña
           </button>
 
-          {/* Re-enrolar (cambiar de dispositivo). Solo cuando ya tiene credencial.
-              Antes era un link minusculo subrayado y casi no se veia — pasa a
-              boton secundario con borde dashed e icono. */}
+          {/* Re-enrolar / anadir este dispositivo. Solo cuando ya tiene credencial.
+              Copy unificado con el caso de primera vez: "Activar biometria en
+              este dispositivo". Cubre los dos escenarios reales del usuario:
+              (a) cambio de movil: la nueva pasa a ser la activa (UNIQUE filtrado
+                  en BD sobreescribe la anterior — la vieja queda muerta).
+              (b) anadir este dispositivo cuando ya enrolaste en otro:
+                  desde el punto de vista del usuario "activa la biometria de
+                  este movil/portatil". El verbo "cambiar" era confuso. */}
           {me?.webauthnEnabled && biometricAvailable && (
             <button
               type="button"
@@ -329,7 +334,7 @@ export default function PinPage() {
               className="flex w-full items-center justify-center gap-2 rounded-lg border border-dashed border-border bg-background px-4 py-2.5 text-sm font-medium text-muted-foreground transition hover:border-primary hover:bg-primary/5 hover:text-primary"
             >
               <Fingerprint className="size-4" />
-              Cambiar el dispositivo de biometría
+              Activar biometría en este dispositivo
             </button>
           )}
         </div>

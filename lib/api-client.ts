@@ -124,11 +124,16 @@ function notifyForbidden(message: string) {
   // porque las queries autenticadas pueden dispararse en background mientras
   // el usuario aun no ha iniciado sesion y mostrarian errores irrelevantes.
   if (isOnLoginPath()) return;
-  toast.error("Sin permisos", {
+  // Llegamos aqui solo cuando tras un refresh el backend SIGUE devolviendo 403
+  // (ver request()). Esto significa que el usuario esta autenticado pero
+  // realmente no tiene permiso para esta accion — no es un problema de token.
+  // En una PWA donde el operario solo ve cosas que le tocan esto deberia ser
+  // raro, pero por si acaso mostramos algo no-tecnico.
+  toast.error("Esta accion no esta disponible", {
     description:
-      message && message.length < 160
+      message && message.length < 160 && !/forbidden|access denied/i.test(message)
         ? message
-        : "No tienes permisos para esta accion.",
+        : "Tu cuenta no tiene acceso a esta opcion. Si crees que es un error, avisa a tu administrador.",
     duration: 5000,
   });
 }
@@ -186,8 +191,15 @@ async function request<T>(
     throw new ApiError(0, networkErr instanceof Error ? networkErr.message : "Network error");
   }
 
-  if (res.status === 401 && retry) {
-    // Attempt token refresh once
+  // 401 Y 403 disparan refresh. Spring Security devuelve 403 (no 401) cuando
+  // el JWT esta caducado o invalido porque el JwtFilter marca el contexto como
+  // anonimo y el AuthorizationFilter responde "Forbidden" al acceder a un
+  // endpoint protegido sin auth. Para el usuario es indistinguible de un
+  // token expirado normal — si no refrescamos, le aparece "Sin permisos"
+  // cuando en realidad es "sesion expirada".
+  // Si tras el refresh el backend SIGUE devolviendo 403 (retry=false), ahi
+  // si es un 403 legitimo de permisos y lo tratamos como tal.
+  if ((res.status === 401 || res.status === 403) && retry) {
     try {
       const newToken = await refreshAccessToken();
       headers.set("Authorization", `Bearer ${newToken}`);
@@ -205,6 +217,8 @@ async function request<T>(
     } catch {
       // ignore parse errors
     }
+    // 403 con retry=false = ya intentamos refresh y sigue forbidden.
+    // Es un permiso real, no un token caducado.
     if (res.status === 403) {
       notifyForbidden(message);
     }
