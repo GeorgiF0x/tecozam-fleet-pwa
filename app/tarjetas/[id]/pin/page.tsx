@@ -54,6 +54,69 @@ interface MeResponse {
 
 type RevealMode = "idle" | "biometria-loading" | "password-prompt" | "password-loading";
 
+// ─── WebAuthn error mapping ───────────────────────────────────────────────────
+// navigator.credentials.{create,get}() lanza DOMException con name estandar
+// FIDO2. El `message` es texto tecnico en ingles que no podemos mostrar al
+// operario. Mapeamos los casos comunes a algo amigable + un flag para saber
+// si fue cancelacion voluntaria (en ese caso, toast neutro en vez de rojo).
+
+type FriendlyWebauthnError = { message: string; wasCancelled: boolean };
+
+function friendlyWebauthnError(err: unknown, fallback: string): FriendlyWebauthnError {
+  const name =
+    err instanceof DOMException
+      ? err.name
+      : err instanceof Error && "name" in err
+        ? err.name
+        : "";
+  switch (name) {
+    case "NotAllowedError":
+      // Cubre tanto cancelacion explicita como timeout sin Face ID.
+      return {
+        message: "Has cancelado la verificación biométrica.",
+        wasCancelled: true,
+      };
+    case "AbortError":
+      return { message: "Operación cancelada.", wasCancelled: true };
+    case "InvalidStateError":
+      return {
+        message:
+          "Este dispositivo ya tiene una biometría guardada para tu cuenta. Elimina la passkey desde los ajustes del sistema y vuelve a intentarlo.",
+        wasCancelled: false,
+      };
+    case "SecurityError":
+      return {
+        message: "No se pudo validar el dominio. Asegúrate de estar en fleet.z-innova.com.",
+        wasCancelled: false,
+      };
+    case "NotSupportedError":
+      return {
+        message: "Tu dispositivo no soporta este tipo de biometría.",
+        wasCancelled: false,
+      };
+    case "TimeoutError":
+      return { message: "Tiempo agotado. Inténtalo de nuevo.", wasCancelled: false };
+    default:
+      if (err instanceof Error && err.message) return { message: err.message, wasCancelled: false };
+      return { message: fallback, wasCancelled: false };
+  }
+}
+
+function notifyWebauthnError(err: unknown, fallback: string): void {
+  // ApiError ya viene con .message friendly desde lib/api-client.
+  if (err instanceof ApiError) {
+    toast.error(err.message);
+    return;
+  }
+  const { message, wasCancelled } = friendlyWebauthnError(err, fallback);
+  if (wasCancelled) {
+    // Toast neutro: cancelar NO es un error, es una decision del usuario.
+    toast(message);
+  } else {
+    toast.error(message);
+  }
+}
+
 // ─── Page ─────────────────────────────────────────────────────────────────────
 
 export default function PinPage() {
@@ -135,12 +198,7 @@ export default function PinPage() {
       setRevealMode("idle");
     } catch (err) {
       setRevealMode("idle");
-      const msg = err instanceof ApiError
-        ? err.message
-        : err instanceof Error
-          ? err.message
-          : "Verificación biométrica fallida";
-      toast.error(msg);
+      notifyWebauthnError(err, "Verificación biométrica fallida");
     }
   }
 
@@ -190,12 +248,7 @@ export default function PinPage() {
       // boton "Ver con biometria" aparezca sin recargar la pagina.
       queryClient.invalidateQueries({ queryKey: ["me"] });
     } catch (err) {
-      const msg = err instanceof ApiError
-        ? err.message
-        : err instanceof Error
-          ? err.message
-          : "Enrolamiento fallido";
-      toast.error(msg);
+      notifyWebauthnError(err, "Enrolamiento fallido");
     }
   }
 
