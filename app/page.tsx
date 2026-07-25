@@ -1,5 +1,6 @@
 "use client";
 
+import { useEffect, useState } from "react";
 import Link from "next/link";
 import { useQuery } from "@tanstack/react-query";
 import {
@@ -136,11 +137,25 @@ export default function HomePage() {
   const firstName =
     user?.trabajadorNombre?.split(" ")[0] ?? user?.username ?? "Conductor";
 
-  const today = new Date().toLocaleDateString("es-ES", {
-    weekday: "long",
-    day: "numeric",
-    month: "long",
-  });
+  // El saludo y la fecha dependen de la hora actual del cliente: si se
+  // calculan en el primer render, el HTML del servidor y el del cliente
+  // pueden no coincidir (sobre todo cerca de un cambio de hora/día o si la
+  // pagina llega cacheada), lo que dispara un error de hidratacion de React
+  // (#418). Se calculan tras montar, para que el primer render sea igual en
+  // servidor y cliente.
+  const [greetingText, setGreetingText] = useState("");
+  const [today, setToday] = useState("");
+
+  useEffect(() => {
+    setGreetingText(greeting());
+    setToday(
+      new Date().toLocaleDateString("es-ES", {
+        weekday: "long",
+        day: "numeric",
+        month: "long",
+      }),
+    );
+  }, []);
 
   // ── Queries ──────────────────────────────────────────────────────────────
 
@@ -191,7 +206,7 @@ export default function HomePage() {
         {/* ── Greeting ───────────────────────────────────────── */}
         <div>
           <h1 className="text-xl font-bold text-foreground">
-            {greeting()}, {firstName}
+            {greetingText}, {firstName}
           </h1>
           <p className="mt-0.5 text-sm capitalize text-muted-foreground">{today}</p>
         </div>
