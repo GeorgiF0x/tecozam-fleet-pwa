@@ -14,7 +14,6 @@ import {
   ZapOff,
   Zap,
   Images,
-  RefreshCw,
   CheckCircle,
   Loader2,
   AlertCircle,
@@ -26,6 +25,8 @@ import {
   CreditCard,
   ScanLine,
   Sparkles,
+  Plus,
+  X,
 } from "lucide-react";
 import { toast } from "sonner";
 import { SearchableSheetSelect } from "@/components/shared/searchable-sheet-select";
@@ -70,24 +71,35 @@ interface Tarjeta {
   tienePinGuardado: boolean;
 }
 
-interface OcrPreviewData {
+// Una foto capturada, pendiente de enviar (el ticket puede componerse de
+// varias fotos — p.ej. tickets largos partidos en 2+ fotos).
+interface CapturedImage {
+  blob: Blob;
+  preview: string;
+}
+
+// Una línea OCR tal y como la devuelve /tickets/ocr-preview (LineaOcrDTO)
+interface OcrPreviewLinea {
+  fotoIndice?: number;
   estacion?: string;
   fechaHora?: string;
-  importeTotal?: number;
-  litros?: number;
-  precioLitro?: number;
   producto?: string;
   numRecibo?: string;
   matricula?: string;
   kms?: number;
-  ocrRaw?: string;
+  litros?: number;
+  precioLitro?: number;
+  importeTotal?: number;
+}
+
+interface OcrPreviewResponse {
+  lineas?: OcrPreviewLinea[];
 }
 
 interface OcrResponse {
   status?: string;
   ticketId?: number;
   message?: string;
-  ocrData?: string;
 }
 
 interface AssignState {
@@ -98,8 +110,11 @@ interface AssignState {
   kilometros: string;
 }
 
-// Editable OCR data — populated from preview, may be edited by user
-interface EditableOcrData {
+// Línea OCR editable — populada desde el preview, editable por el usuario.
+// Mapea 1:1 a LineaOcrDTO (backend), con los números como texto para los
+// inputs controlados.
+interface EditableLinea {
+  fotoIndice: number | null;
   estacion: string;
   fechaHora: string;
   importeTotal: string;
@@ -108,7 +123,7 @@ interface EditableOcrData {
   producto: string;
   numRecibo: string;
   matricula: string;
-  ocrRaw: string;
+  kms: string;
 }
 
 // ─── Storage keys ─────────────────────────────────────────────────────────────
@@ -119,24 +134,26 @@ function vehiculoKey(cat: Categoria): string {
 
 const CENTRO_KEY = "centro-coste";
 
-// ─── OCR preview → EditableOcrData conversion ─────────────────────────────────
+// ─── OCR preview → EditableLinea conversion ───────────────────────────────────
 
-function previewToEditable(data: OcrPreviewData): EditableOcrData {
+function lineaToEditable(l: OcrPreviewLinea): EditableLinea {
   return {
-    estacion: data.estacion ?? "",
-    fechaHora: data.fechaHora ?? "",
-    importeTotal: data.importeTotal != null ? String(data.importeTotal) : "",
-    litros: data.litros != null ? String(data.litros) : "",
-    precioLitro: data.precioLitro != null ? String(data.precioLitro) : "",
-    producto: data.producto ?? "",
-    numRecibo: data.numRecibo ?? "",
-    matricula: data.matricula ?? "",
-    ocrRaw: data.ocrRaw ?? "",
+    fotoIndice: l.fotoIndice ?? null,
+    estacion: l.estacion ?? "",
+    fechaHora: l.fechaHora ?? "",
+    importeTotal: l.importeTotal != null ? String(l.importeTotal) : "",
+    litros: l.litros != null ? String(l.litros) : "",
+    precioLitro: l.precioLitro != null ? String(l.precioLitro) : "",
+    producto: l.producto ?? "",
+    numRecibo: l.numRecibo ?? "",
+    matricula: l.matricula ?? "",
+    kms: l.kms != null ? String(l.kms) : "",
   };
 }
 
-function emptyEditable(): EditableOcrData {
+function emptyLinea(fotoIndice: number | null = null): EditableLinea {
   return {
+    fotoIndice,
     estacion: "",
     fechaHora: "",
     importeTotal: "",
@@ -145,7 +162,7 @@ function emptyEditable(): EditableOcrData {
     producto: "",
     numRecibo: "",
     matricula: "",
-    ocrRaw: "",
+    kms: "",
   };
 }
 
@@ -157,19 +174,6 @@ function formatCurrency(value?: number): string | null {
     style: "currency",
     currency: "EUR",
   }).format(value);
-}
-
-function formatLitros(value?: number): string | null {
-  if (value == null) return null;
-  return `${new Intl.NumberFormat("es-ES", { maximumFractionDigits: 2 }).format(value)} L`;
-}
-
-function formatPrecioLitro(value?: number): string | null {
-  if (value == null) return null;
-  return `${new Intl.NumberFormat("es-ES", {
-    minimumFractionDigits: 3,
-    maximumFractionDigits: 3,
-  }).format(value)} €/L`;
 }
 
 // ─── Stepper ─────────────────────────────────────────────────────────────────
@@ -448,43 +452,69 @@ function CameraStep({
   );
 }
 
-// ─── Step 2 — Image Preview ───────────────────────────────────────────────────
+// ─── Step 2 — Image Preview (N fotos) ────────────────────────────────────────
 
 function ImagePreviewStep({
-  preview,
-  onBack,
+  images,
+  onRemove,
+  onAddAnother,
   onContinue,
 }: {
-  preview: string;
-  onBack: () => void;
+  images: CapturedImage[];
+  onRemove: (index: number) => void;
+  onAddAnother: () => void;
   onContinue: () => void;
 }) {
   return (
     <div className="flex flex-1 flex-col overflow-y-auto">
-      <div className="mx-4 mt-4 overflow-hidden rounded-2xl border border-border">
-        <img
-          src={preview}
-          alt="Preview del ticket"
-          className="max-h-64 w-full object-contain bg-black"
-        />
+      <div className="px-4 pt-4">
+        <p className="text-sm text-muted-foreground">
+          {images.length === 1
+            ? "1 foto añadida."
+            : `${images.length} fotos añadidas.`}{" "}
+          Si el ticket es largo, añade todas las fotos que hagan falta antes
+          de continuar.
+        </p>
+      </div>
+
+      <div className="grid grid-cols-2 gap-3 px-4 py-4">
+        {images.map((img, idx) => (
+          <div
+            key={idx}
+            className="relative overflow-hidden rounded-2xl border border-border"
+          >
+            <img
+              src={img.preview}
+              alt={`Foto ${idx + 1} del ticket`}
+              className="h-32 w-full object-cover bg-black"
+            />
+            <span className="absolute left-2 top-2 rounded-full bg-black/60 px-2 py-0.5 text-[10px] font-semibold text-white">
+              Foto {idx + 1}
+            </span>
+            <button
+              onClick={() => onRemove(idx)}
+              aria-label={`Quitar foto ${idx + 1}`}
+              className="absolute right-2 top-2 flex size-6 items-center justify-center rounded-full bg-black/60 text-white"
+            >
+              <X className="size-3.5" />
+            </button>
+          </div>
+        ))}
+
+        <button
+          onClick={onAddAnother}
+          className="flex h-32 flex-col items-center justify-center gap-1 rounded-2xl border-2 border-dashed border-border text-muted-foreground transition-colors hover:bg-muted"
+        >
+          <Plus className="size-6" />
+          <span className="text-xs font-semibold">Añadir foto</span>
+        </button>
       </div>
 
       <div className="flex flex-col gap-3 px-4 py-5">
-        <p className="text-sm text-muted-foreground text-center">
-          Comprueba que el ticket se ve nítido antes de continuar.
-        </p>
-
-        <button
-          onClick={onBack}
-          className="flex h-12 w-full items-center justify-center gap-2 rounded-xl border border-border text-sm font-semibold text-foreground transition-colors hover:bg-muted active:scale-[0.98]"
-        >
-          <RefreshCw className="size-4" />
-          Repetir foto
-        </button>
-
         <button
           onClick={onContinue}
-          className="flex h-12 w-full items-center justify-center gap-2 rounded-xl bg-primary text-sm font-bold text-primary-foreground shadow-md shadow-primary/30 transition-all hover:bg-primary/90 active:scale-[0.98]"
+          disabled={images.length === 0}
+          className="flex h-12 w-full items-center justify-center gap-2 rounded-xl bg-primary text-sm font-bold text-primary-foreground shadow-md shadow-primary/30 transition-all hover:bg-primary/90 active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-50"
         >
           Continuar
         </button>
@@ -1021,41 +1051,133 @@ function OcrField({
   );
 }
 
-// ─── Step 5 — OCR + Edit (2-in-1) ────────────────────────────────────────────
+// ─── Una línea editable dentro del paso OCR ──────────────────────────────────
+
+function LineaOcrCard({
+  index,
+  linea,
+  onChange,
+}: {
+  index: number;
+  linea: EditableLinea;
+  onChange: (field: keyof EditableLinea, value: string) => void;
+}) {
+  return (
+    <div className="flex flex-col gap-4 rounded-2xl border border-primary/20 bg-primary/[0.03] p-4">
+      <div className="flex items-center gap-2">
+        <Sparkles className="size-4 text-primary" />
+        <p className="text-xs font-semibold text-primary">
+          Línea {index + 1}
+          {linea.fotoIndice != null ? ` · foto ${linea.fotoIndice + 1}` : ""}
+        </p>
+      </div>
+
+      <OcrField
+        label="Estación"
+        required
+        value={linea.estacion}
+        onChange={(v) => onChange("estacion", v)}
+        placeholder="Nombre de la estación"
+      />
+
+      <OcrField
+        label="Fecha y hora"
+        value={linea.fechaHora}
+        onChange={(v) => onChange("fechaHora", v)}
+        type="text"
+        placeholder="2026-01-29T10:05:00"
+      />
+
+      <OcrField
+        label="Importe total"
+        required
+        value={linea.importeTotal}
+        onChange={(v) => onChange("importeTotal", v)}
+        type="number"
+        placeholder="0.00"
+        suffix="€"
+      />
+
+      <OcrField
+        label="Litros"
+        value={linea.litros}
+        onChange={(v) => onChange("litros", v)}
+        type="number"
+        placeholder="—"
+        suffix="L"
+      />
+
+      <OcrField
+        label="Precio / L"
+        value={linea.precioLitro}
+        onChange={(v) => onChange("precioLitro", v)}
+        type="number"
+        placeholder="—"
+        suffix="€/L"
+      />
+
+      <OcrField
+        label="Producto"
+        value={linea.producto}
+        onChange={(v) => onChange("producto", v)}
+        placeholder="Diésel, Gasolina 95..."
+      />
+
+      <OcrField
+        label="Nº recibo"
+        value={linea.numRecibo}
+        onChange={(v) => onChange("numRecibo", v)}
+        placeholder="—"
+      />
+
+      <OcrField
+        label="Matrícula detectada"
+        value={linea.matricula}
+        onChange={(v) => onChange("matricula", v)}
+        placeholder="—"
+      />
+    </div>
+  );
+}
+
+// ─── Step 5 — OCR + Edit (2-in-1), multi-foto / multi-línea ──────────────────
 
 type OcrSubState = "loading" | "ready" | "error";
 
 function OcrAndEditStep({
-  imageBlob,
+  images,
   assignState,
   tarjeta,
   onBack,
   onSuccess,
   onSaveRecents,
 }: {
-  imageBlob: Blob;
+  images: CapturedImage[];
   assignState: AssignState;
   tarjeta: Tarjeta;
   onBack: () => void;
-  onSuccess: (result: OcrResponse, ocrData: EditableOcrData) => void;
+  onSuccess: (result: OcrResponse, lineas: EditableLinea[]) => void;
   onSaveRecents: () => void;
 }) {
   const [subState, setSubState] = useState<OcrSubState>("loading");
-  const [ocrData, setOcrData] = useState<EditableOcrData>(emptyEditable());
+  const [lineas, setLineas] = useState<EditableLinea[]>([]);
   const [submitError, setSubmitError] = useState<string | null>(null);
 
   // OCR preview mutation — fires on mount (FLEET-01: ya no envia PIN)
-  const ocrPreviewMutation = useMutation<OcrPreviewData, Error, void>({
+  const ocrPreviewMutation = useMutation<OcrPreviewResponse, Error, void>({
     mutationFn: async () => {
       const formData = new FormData();
-      formData.append("imagen", imageBlob, "ticket.jpg");
-      return apiClient.upload<OcrPreviewData>(
+      images.forEach((img) =>
+        formData.append("imagenes", img.blob, "ticket.jpg"),
+      );
+      return apiClient.upload<OcrPreviewResponse>(
         `/tickets/ocr-preview?tarjetaId=${assignState.tarjetaId}`,
         formData,
       );
     },
     onSuccess: (data) => {
-      setOcrData(previewToEditable(data));
+      const nuevasLineas = (data.lineas ?? []).map(lineaToEditable);
+      setLineas(nuevasLineas.length > 0 ? nuevasLineas : [emptyLinea()]);
       setSubState("ready");
     },
     onError: (err) => {
@@ -1072,22 +1194,26 @@ function OcrAndEditStep({
   const submitMutation = useMutation<OcrResponse, Error, void>({
     mutationFn: async () => {
       const formData = new FormData();
-      formData.append("imagen", imageBlob, "ticket.jpg");
+      images.forEach((img) =>
+        formData.append("imagenes", img.blob, "ticket.jpg"),
+      );
 
       const params: Record<string, unknown> = {
         tarjetaId: tarjeta.id,
         categoriaRecurso: assignState.categoria,
         vehiculoId: assignState.vehiculoId,
-        // OCR fields
-        estacion: ocrData.estacion,
-        fechaHora: ocrData.fechaHora || undefined,
-        importeTotal: ocrData.importeTotal ? Number(ocrData.importeTotal) : undefined,
-        litros: ocrData.litros ? Number(ocrData.litros) : undefined,
-        precioLitro: ocrData.precioLitro ? Number(ocrData.precioLitro) : undefined,
-        producto: ocrData.producto || undefined,
-        numRecibo: ocrData.numRecibo || undefined,
-        matricula: ocrData.matricula || undefined,
-        ocrRaw: ocrData.ocrRaw || undefined,
+        lineas: lineas.map((l) => ({
+          fotoIndice: l.fotoIndice,
+          estacion: l.estacion || undefined,
+          fechaHora: l.fechaHora || undefined,
+          producto: l.producto || undefined,
+          numRecibo: l.numRecibo || undefined,
+          matricula: l.matricula || undefined,
+          kms: l.kms ? Number(l.kms) : undefined,
+          litros: l.litros ? Number(l.litros) : undefined,
+          precioLitro: l.precioLitro ? Number(l.precioLitro) : undefined,
+          importeTotal: l.importeTotal ? Number(l.importeTotal) : undefined,
+        })),
       };
       if (assignState.centroCosteId) params.centroCosteId = assignState.centroCosteId;
       if (assignState.kilometros) params.kilometros = Number(assignState.kilometros);
@@ -1103,7 +1229,7 @@ function OcrAndEditStep({
         navigator.vibrate(50);
       }
       onSaveRecents();
-      onSuccess(data, ocrData);
+      onSuccess(data, lineas);
     },
     onError: (err) => {
       if (typeof navigator !== "undefined" && navigator.vibrate) {
@@ -1124,12 +1250,15 @@ function OcrAndEditStep({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  function setField<K extends keyof EditableOcrData>(key: K, val: string) {
-    setOcrData((d) => ({ ...d, [key]: val }));
+  function setLineaField(index: number, field: keyof EditableLinea, value: string) {
+    setLineas((prev) =>
+      prev.map((l, i) => (i === index ? { ...l, [field]: value } : l)),
+    );
   }
 
   const canSubmit =
-    ocrData.estacion.trim() !== "" && ocrData.importeTotal.trim() !== "";
+    lineas.length > 0 &&
+    lineas.every((l) => l.estacion.trim() !== "" && l.importeTotal.trim() !== "");
 
   // ── Loading sub-state ──────────────────────────────────────────────────────
   if (subState === "loading") {
@@ -1143,7 +1272,8 @@ function OcrAndEditStep({
             Procesando ticket con IA...
           </p>
           <p className="text-sm text-muted-foreground">
-            Extrayendo datos del ticket automáticamente
+            Extrayendo datos de {images.length}{" "}
+            {images.length === 1 ? "foto" : "fotos"}
           </p>
         </div>
         <Loader2 className="size-6 animate-spin text-primary" />
@@ -1175,91 +1305,28 @@ function OcrAndEditStep({
           onClick={onBack}
           className="text-sm font-semibold text-primary underline-offset-2 hover:underline"
         >
-          Volver al PIN
+          Volver
         </button>
       </div>
     );
   }
 
-  // ── Ready sub-state — editable form ───────────────────────────────────────
+  // ── Ready sub-state — editable form, una tarjeta por línea ───────────────
   return (
     <div className="flex flex-1 flex-col overflow-y-auto">
       <div className="flex flex-col gap-5 px-4 py-4">
-        {/* OCR fields section */}
-        <div className="flex flex-col gap-4 rounded-2xl border border-primary/20 bg-primary/[0.03] p-4">
-          {/* Header badge */}
-          <div className="flex items-center gap-2">
-            <Sparkles className="size-4 text-primary" />
-            <p className="text-xs font-semibold text-primary">
-              Datos extraídos por IA · revisa y edita si es necesario
-            </p>
-          </div>
+        <p className="text-xs font-semibold text-muted-foreground">
+          Datos extraídos por IA · revisa y edita si es necesario
+        </p>
 
-          <OcrField
-            label="Estación"
-            required
-            value={ocrData.estacion}
-            onChange={(v) => setField("estacion", v)}
-            placeholder="Nombre de la estación"
+        {lineas.map((linea, idx) => (
+          <LineaOcrCard
+            key={idx}
+            index={idx}
+            linea={linea}
+            onChange={(field, value) => setLineaField(idx, field, value)}
           />
-
-          <OcrField
-            label="Fecha y hora"
-            value={ocrData.fechaHora}
-            onChange={(v) => setField("fechaHora", v)}
-            type="text"
-            placeholder="2026-01-29T10:05:00"
-          />
-
-          <OcrField
-            label="Importe total"
-            required
-            value={ocrData.importeTotal}
-            onChange={(v) => setField("importeTotal", v)}
-            type="number"
-            placeholder="0.00"
-            suffix="€"
-          />
-
-          <OcrField
-            label="Litros"
-            value={ocrData.litros}
-            onChange={(v) => setField("litros", v)}
-            type="number"
-            placeholder="—"
-            suffix="L"
-          />
-
-          <OcrField
-            label="Precio / L"
-            value={ocrData.precioLitro}
-            onChange={(v) => setField("precioLitro", v)}
-            type="number"
-            placeholder="—"
-            suffix="€/L"
-          />
-
-          <OcrField
-            label="Producto"
-            value={ocrData.producto}
-            onChange={(v) => setField("producto", v)}
-            placeholder="Diésel, Gasolina 95..."
-          />
-
-          <OcrField
-            label="Nº recibo"
-            value={ocrData.numRecibo}
-            onChange={(v) => setField("numRecibo", v)}
-            placeholder="—"
-          />
-
-          <OcrField
-            label="Matrícula detectada"
-            value={ocrData.matricula}
-            onChange={(v) => setField("matricula", v)}
-            placeholder="—"
-          />
-        </div>
+        ))}
 
         {/* Submit error */}
         {submitError && (
@@ -1311,47 +1378,24 @@ function OcrAndEditStep({
 
 // ─── Success view ─────────────────────────────────────────────────────────────
 
-interface OcrDisplayField {
-  label: string;
-  value: string | null;
-}
-
 function SuccessView({
   result,
   tarjeta,
-  ocrData,
+  lineas,
   onHome,
   onScanAnother,
 }: {
   result: OcrResponse;
   tarjeta: Tarjeta | null;
-  ocrData: EditableOcrData;
+  lineas: EditableLinea[];
   onHome: () => void;
   onScanAnother: () => void;
 }) {
-  const fields: OcrDisplayField[] = [
-    { label: "Estación", value: ocrData.estacion || null },
-    { label: "Fecha y hora", value: ocrData.fechaHora || null },
-    { label: "Producto", value: ocrData.producto || null },
-    {
-      label: "Litros",
-      value: ocrData.litros ? formatLitros(Number(ocrData.litros)) : null,
-    },
-    {
-      label: "Precio/L",
-      value: ocrData.precioLitro
-        ? formatPrecioLitro(Number(ocrData.precioLitro))
-        : null,
-    },
-    {
-      label: "Importe",
-      value: ocrData.importeTotal
-        ? formatCurrency(Number(ocrData.importeTotal))
-        : null,
-    },
-    { label: "Matrícula", value: ocrData.matricula || null },
-    { label: "Nº recibo", value: ocrData.numRecibo || null },
-  ].filter((f): f is { label: string; value: string } => f.value !== null);
+  const importeAgregado = lineas.reduce(
+    (sum, l) => sum + (l.importeTotal ? Number(l.importeTotal) : 0),
+    0,
+  );
+  const estacion = lineas[0]?.estacion || null;
 
   return (
     <div className="flex flex-1 flex-col overflow-y-auto px-4 py-6">
@@ -1368,31 +1412,42 @@ function SuccessView({
         </div>
       </div>
 
-      {/* OCR data card */}
-      {fields.length > 0 && (
-        <div className="mb-4 overflow-hidden rounded-2xl border border-primary/30 bg-card shadow-sm">
-          <div className="border-b border-border bg-primary/5 px-4 py-3">
-            <p className="text-xs font-semibold uppercase tracking-widest text-primary">
-              Datos del ticket
-            </p>
+      {/* Resumen */}
+      <div className="mb-4 overflow-hidden rounded-2xl border border-primary/30 bg-card shadow-sm">
+        <div className="border-b border-border bg-primary/5 px-4 py-3">
+          <p className="text-xs font-semibold uppercase tracking-widest text-primary">
+            Resumen del ticket
+          </p>
+        </div>
+        <div className="divide-y divide-border">
+          {estacion && (
+            <div className="flex items-baseline justify-between gap-4 px-4 py-2.5">
+              <span className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                Estación
+              </span>
+              <span className="font-mono text-sm text-foreground">
+                {estacion}
+              </span>
+            </div>
+          )}
+          <div className="flex items-baseline justify-between gap-4 px-4 py-2.5">
+            <span className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+              Líneas
+            </span>
+            <span className="font-mono text-sm tabular-nums text-foreground">
+              {lineas.length}
+            </span>
           </div>
-          <div className="divide-y divide-border">
-            {fields.map((field) => (
-              <div
-                key={field.label}
-                className="flex items-baseline justify-between gap-4 px-4 py-2.5"
-              >
-                <span className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
-                  {field.label}
-                </span>
-                <span className="font-mono text-sm tabular-nums text-foreground">
-                  {field.value}
-                </span>
-              </div>
-            ))}
+          <div className="flex items-baseline justify-between gap-4 px-4 py-2.5">
+            <span className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+              Importe total
+            </span>
+            <span className="font-mono text-sm tabular-nums text-foreground">
+              {formatCurrency(importeAgregado)}
+            </span>
           </div>
         </div>
-      )}
+      </div>
 
       {/* Ticket metadata */}
       <div className="mb-6 overflow-hidden rounded-2xl border border-border bg-card shadow-sm">
@@ -1454,10 +1509,9 @@ function SuccessView({
 export default function EscanearPage() {
   const router = useRouter();
   const [step, setStep] = useState<Step>("camera");
-  const [imageBlob, setImageBlob] = useState<Blob | null>(null);
-  const [preview, setPreview] = useState<string>("");
+  const [images, setImages] = useState<CapturedImage[]>([]);
   const [ocrResult, setOcrResult] = useState<OcrResponse | null>(null);
-  const [finalOcrData, setFinalOcrData] = useState<EditableOcrData>(emptyEditable());
+  const [finalLineas, setFinalLineas] = useState<EditableLinea[]>([]);
 
   const [assignState, setAssignState] = useState<AssignState>({
     categoria: "VEHICULO",
@@ -1480,9 +1534,12 @@ export default function EscanearPage() {
   // ── Handlers ──────────────────────────────────────────────────────────────
 
   function handleCapture(blob: Blob, previewUrl: string) {
-    setImageBlob(blob);
-    setPreview(previewUrl);
+    setImages((prev) => [...prev, { blob, preview: previewUrl }]);
     setStep("image-preview");
+  }
+
+  function handleRemoveImage(index: number) {
+    setImages((prev) => prev.filter((_, i) => i !== index));
   }
 
   function handleBack() {
@@ -1491,7 +1548,11 @@ export default function EscanearPage() {
         router.back();
         break;
       case "image-preview":
-        setStep("camera");
+        if (images.length === 0) {
+          setStep("camera");
+        } else {
+          router.back();
+        }
         break;
       case "assignment":
         setStep("image-preview");
@@ -1515,9 +1576,8 @@ export default function EscanearPage() {
 
   function handleScanAnother() {
     setOcrResult(null);
-    setFinalOcrData(emptyEditable());
-    setImageBlob(null);
-    setPreview("");
+    setFinalLineas([]);
+    setImages([]);
     setAssignState({
       categoria: "VEHICULO",
       vehiculoId: null,
@@ -1542,7 +1602,7 @@ export default function EscanearPage() {
           <SuccessView
             result={ocrResult}
             tarjeta={selectedTarjeta}
-            ocrData={finalOcrData}
+            lineas={finalLineas}
             onHome={() => router.push("/")}
             onScanAnother={handleScanAnother}
           />
@@ -1574,8 +1634,9 @@ export default function EscanearPage() {
 
         {step === "image-preview" && (
           <ImagePreviewStep
-            preview={preview}
-            onBack={() => setStep("camera")}
+            images={images}
+            onRemove={handleRemoveImage}
+            onAddAnother={() => setStep("camera")}
             onContinue={() => setStep("assignment")}
           />
         )}
@@ -1589,15 +1650,15 @@ export default function EscanearPage() {
           />
         )}
 
-        {step === "ocr-edit" && imageBlob && selectedTarjeta && (
+        {step === "ocr-edit" && images.length > 0 && selectedTarjeta && (
           <OcrAndEditStep
-            imageBlob={imageBlob}
+            images={images}
             assignState={assignState}
             tarjeta={selectedTarjeta}
             onBack={() => setStep("assignment")}
-            onSuccess={(result, ocrData) => {
+            onSuccess={(result, lineas) => {
               setOcrResult(result);
-              setFinalOcrData(ocrData);
+              setFinalLineas(lineas);
               setStep("success");
             }}
             onSaveRecents={handleSaveRecents}
@@ -1607,4 +1668,3 @@ export default function EscanearPage() {
     </div>
   );
 }
-
