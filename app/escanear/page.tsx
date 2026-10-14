@@ -1548,11 +1548,7 @@ export default function EscanearPage() {
         router.back();
         break;
       case "image-preview":
-        if (images.length === 0) {
-          setStep("camera");
-        } else {
-          router.back();
-        }
+        setStep("camera");
         break;
       case "assignment":
         setStep("image-preview");
