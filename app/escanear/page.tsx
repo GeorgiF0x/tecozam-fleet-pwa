@@ -472,8 +472,10 @@ function ImagePreviewStep({
           {images.length === 1
             ? "1 foto añadida."
             : `${images.length} fotos añadidas.`}{" "}
+          Todas las fotos que añadas aquí se guardarán como el mismo ticket.
           Si el ticket es largo, añade todas las fotos que hagan falta antes
-          de continuar.
+          de continuar. Si quieres subir un ticket distinto, primero termina
+          y envía este.
         </p>
       </div>
 
