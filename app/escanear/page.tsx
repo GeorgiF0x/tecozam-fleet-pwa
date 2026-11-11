@@ -78,6 +78,12 @@ interface Prestamo {
   estado: string;
 }
 
+interface RecursoDisponible {
+  id: number;
+  descripcion: string;
+  detalle?: string | null;
+}
+
 // Una foto capturada, pendiente de enviar (el ticket puede componerse de
 // varias fotos — p.ej. tickets largos partidos en 2+ fotos).
 interface CapturedImage {
@@ -750,7 +756,7 @@ function AssignmentStep({
   onBack: () => void;
   onContinue: () => void;
 }) {
-  const { data: vehiculosTodos = [] } = useQuery<Vehiculo[]>({
+  const { data: vehiculosTodos = [], refetch: refetchVehiculosTodos } = useQuery<Vehiculo[]>({
     queryKey: ["vehiculos", assignState.categoria],
     queryFn: () =>
       apiClient.get<Vehiculo[]>(
@@ -758,9 +764,41 @@ function AssignmentStep({
       ),
   });
 
-  const { data: prestamos = [] } = useQuery<Prestamo[]>({
+  const { data: prestamos = [], refetch: refetchPrestamos } = useQuery<Prestamo[]>({
     queryKey: ["mis-prestamos"],
     queryFn: () => apiClient.get<Prestamo[]>("/prestamos/mis-prestamos"),
+  });
+
+  // Vehiculos DISPONIBLE que el operario puede auto-asignarse cuando le dan
+  // uno de sustitucion y no aparece en su lista de prestamos activos. Queda
+  // marcado como creadoPorCampo=true para que el gestor lo revise despues.
+  const { data: vehiculosDisponibles = [] } = useQuery<RecursoDisponible[]>({
+    queryKey: ["recursos-disponibles", "VEHICULO"],
+    queryFn: () =>
+      apiClient.get<RecursoDisponible[]>(
+        "/prestamos/recursos-disponibles?tipo=VEHICULO",
+      ),
+    enabled: assignState.categoria === "VEHICULO",
+  });
+
+  const asignarSustitucionMutation = useMutation({
+    mutationFn: (recurso: RecursoDisponible) =>
+      apiClient.post<Prestamo>("/prestamos/mis-prestamos", {
+        tipoRecurso: "VEHICULO",
+        vehiculoId: recurso.id,
+        centroCosteId: assignState.centroCosteId,
+        fechaInicio: new Date().toISOString().slice(0, 19),
+      }),
+    onSuccess: async (_data, recurso) => {
+      await Promise.all([refetchPrestamos(), refetchVehiculosTodos()]);
+      setAssignState((s) => ({ ...s, vehiculoId: recurso.id }));
+      toast.success(`Vehículo ${recurso.descripcion} asignado`);
+    },
+    onError: (err) => {
+      toast.error(
+        err instanceof ApiError ? err.message : "No se pudo asignar el vehículo",
+      );
+    },
   });
 
   // Solo los vehiculos con un prestamo de recurso VEHICULO activo (o vencido
@@ -948,6 +986,43 @@ function AssignmentStep({
             <CentroItem centro={c} isSelected={isSelected} />
           )}
         />
+
+        {/* Vehículo de sustitución — casos excepcionales, auto-asignación */}
+        {assignState.categoria === "VEHICULO" && (
+          <SearchableSheetSelect<RecursoDisponible>
+            title="Selecciona vehículo de sustitución"
+            value={null}
+            onChange={(r) => asignarSustitucionMutation.mutate(r)}
+            items={vehiculosDisponibles}
+            disabled={
+              !assignState.centroCosteId || asignarSustitucionMutation.isPending
+            }
+            emptyMessage="No hay vehículos disponibles para asignar"
+            searchPlaceholder="Buscar por matrícula..."
+            getKey={(r) => r.id}
+            getSearchText={(r) => [r.descripcion, r.detalle].filter(Boolean).join(" ")}
+            renderTrigger={() => (
+              <div className="flex items-center gap-2 text-muted-foreground">
+                <Plus className="size-4 shrink-0" />
+                <span className="text-sm">
+                  {assignState.centroCosteId
+                    ? "¿Vehículo de sustitución? Añádelo aquí"
+                    : "Selecciona antes un centro de coste"}
+                </span>
+              </div>
+            )}
+            renderItem={(r) => (
+              <div className="flex flex-col">
+                <span className="font-mono text-sm font-bold tracking-widest text-foreground">
+                  {r.descripcion}
+                </span>
+                {r.detalle && (
+                  <span className="text-xs text-muted-foreground">{r.detalle}</span>
+                )}
+              </div>
+            )}
+          />
+        )}
 
         {/* Tarjeta */}
         {tarjetas.length === 1 ? (
