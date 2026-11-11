@@ -29,6 +29,12 @@ interface SearchableSheetSelectProps<T> {
   required?: boolean;
   /** Title shown in the sheet header */
   title?: string;
+  /** Hide the own trigger button — open only via `autoOpen` (e.g. triggered from another list) */
+  hideTrigger?: boolean;
+  /** Opens the sheet programmatically when it flips to true */
+  autoOpen?: boolean;
+  /** Called right after an `autoOpen` has opened the sheet, so the caller can reset its flag */
+  onAutoOpened?: () => void;
 }
 
 // ─── Component ────────────────────────────────────────────────────────────────
@@ -49,11 +55,23 @@ export function SearchableSheetSelect<T>({
   label,
   required = false,
   title,
+  hideTrigger = false,
+  autoOpen = false,
+  onAutoOpened,
 }: SearchableSheetSelectProps<T>) {
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
   const searchRef = useRef<HTMLInputElement>(null);
   const sheetRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (autoOpen && !disabled) {
+      setQuery("");
+      setOpen(true);
+      onAutoOpened?.();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [autoOpen]);
 
   // ── Filtered items ─────────────────────────────────────────────────────────
 
@@ -117,29 +135,31 @@ export function SearchableSheetSelect<T>({
   return (
     <>
       {/* Trigger */}
-      <div className="flex flex-col gap-1.5">
-        {label && (
-          <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-            {label}
-            {required && <span className="ml-0.5 text-destructive">*</span>}
-          </p>
-        )}
-        <button
-          type="button"
-          onClick={handleOpen}
-          disabled={disabled}
-          aria-haspopup="dialog"
-          aria-expanded={open}
-          className={cn(
-            "flex min-h-[56px] w-full items-center justify-between rounded-xl border border-border bg-card px-4 py-3 text-left transition-colors",
-            "hover:bg-muted/50 active:scale-[0.99] disabled:pointer-events-none disabled:opacity-50",
-            open && "border-primary ring-2 ring-primary/20",
+      {!hideTrigger && (
+        <div className="flex flex-col gap-1.5">
+          {label && (
+            <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+              {label}
+              {required && <span className="ml-0.5 text-destructive">*</span>}
+            </p>
           )}
-        >
-          <div className="min-w-0 flex-1">{renderTrigger(value)}</div>
-          <Search className="ml-2 size-4 shrink-0 text-muted-foreground" />
-        </button>
-      </div>
+          <button
+            type="button"
+            onClick={handleOpen}
+            disabled={disabled}
+            aria-haspopup="dialog"
+            aria-expanded={open}
+            className={cn(
+              "flex min-h-[56px] w-full items-center justify-between rounded-xl border border-border bg-card px-4 py-3 text-left transition-colors",
+              "hover:bg-muted/50 active:scale-[0.99] disabled:pointer-events-none disabled:opacity-50",
+              open && "border-primary ring-2 ring-primary/20",
+            )}
+          >
+            <div className="min-w-0 flex-1">{renderTrigger(value)}</div>
+            <Search className="ml-2 size-4 shrink-0 text-muted-foreground" />
+          </button>
+        </div>
+      )}
 
       {/* Portal-like overlay — rendered in-tree but fixed positioned */}
       {open && (

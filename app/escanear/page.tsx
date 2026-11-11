@@ -147,6 +147,10 @@ function vehiculoKey(cat: Categoria): string {
 
 const CENTRO_KEY = "centro-coste";
 
+// Fila especial dentro del listado de "Vehiculo" que abre el selector de
+// vehiculo de sustitucion — id negativo para no colisionar con ids reales.
+const SUSTITUCION_SENTINEL_ID = -1;
+
 // ─── OCR preview → EditableLinea conversion ───────────────────────────────────
 
 function lineaToEditable(l: OcrPreviewLinea): EditableLinea {
@@ -800,7 +804,7 @@ function AssignmentStep({
   });
 
   const [sustitucionAsignada, setSustitucionAsignada] = useState<RecursoDisponible | null>(null);
-  const [mostrarSustitucion, setMostrarSustitucion] = useState(false);
+  const [sustitucionSheetOpen, setSustitucionSheetOpen] = useState(false);
 
   const asignarSustitucionMutation = useMutation({
     mutationFn: (recurso: RecursoDisponible) =>
@@ -952,14 +956,33 @@ function AssignmentStep({
               : "Selecciona maquinaria"
           }
           value={selectedVehiculo}
-          onChange={(v) =>
+          onChange={(v) => {
+            if (v.id === SUSTITUCION_SENTINEL_ID) {
+              if (!assignState.centroCosteId) {
+                toast.error("Selecciona antes un centro de coste");
+                return;
+              }
+              setSustitucionSheetOpen(true);
+              return;
+            }
             setAssignState((s) => ({
               ...s,
               vehiculoId: v.id,
               centroCosteId: v.centroCosteId ?? s.centroCosteId,
-            }))
+            }));
+          }}
+          items={
+            assignState.categoria === "VEHICULO"
+              ? [
+                  ...vehiculos,
+                  {
+                    id: SUSTITUCION_SENTINEL_ID,
+                    nombre: "Vehículo de sustitución",
+                    categoria: assignState.categoria,
+                  },
+                ]
+              : vehiculos
           }
-          items={vehiculos}
           emptyMessage={
             assignState.categoria === "VEHICULO"
               ? "No hay vehículos disponibles"
@@ -972,7 +995,9 @@ function AssignmentStep({
           }
           getKey={(v) => v.id}
           getSearchText={(v) =>
-            [v.matricula, v.codigoObra, v.nombre].filter(Boolean).join(" ")
+            v.id === SUSTITUCION_SENTINEL_ID
+              ? "vehiculo sustitucion sustituto"
+              : [v.matricula, v.codigoObra, v.nombre].filter(Boolean).join(" ")
           }
           recentItems={recentVehiculos}
           recentLabel="Últimos usados"
@@ -983,14 +1008,25 @@ function AssignmentStep({
               esSustitucion={v?.id === sustitucionAsignada?.id}
             />
           )}
-          renderItem={(v, isSelected) => (
-            <VehiculoItem
-              vehiculo={v}
-              categoria={assignState.categoria}
-              isSelected={isSelected}
-              esSustitucion={v.id === sustitucionAsignada?.id}
-            />
-          )}
+          renderItem={(v, isSelected) =>
+            v.id === SUSTITUCION_SENTINEL_ID ? (
+              <div className="flex flex-1 items-center gap-3">
+                <div className="flex size-9 shrink-0 items-center justify-center rounded-lg border border-dashed border-border">
+                  <Plus className="size-4 text-muted-foreground" />
+                </div>
+                <span className="text-sm font-medium text-foreground">
+                  Vehículo de sustitución
+                </span>
+              </div>
+            ) : (
+              <VehiculoItem
+                vehiculo={v}
+                categoria={assignState.categoria}
+                isSelected={isSelected}
+                esSustitucion={v.id === sustitucionAsignada?.id}
+              />
+            )
+          }
         />
 
         {/* Centro de coste */}
@@ -1014,74 +1050,34 @@ function AssignmentStep({
           )}
         />
 
-        {/* Vehículo de sustitución — casos excepcionales, auto-asignación */}
+        {/* Vehículo de sustitución — sin fila propia, se abre desde la fila
+            especial del listado de "Vehículo" de arriba */}
         {assignState.categoria === "VEHICULO" && (
-          <div className="flex flex-col gap-2">
-            <button
-              type="button"
-              onClick={() => setMostrarSustitucion((v) => !v)}
-              disabled={!assignState.centroCosteId}
-              className={cn(
-                "flex min-h-[48px] w-full items-center justify-between rounded-xl border px-4 py-3 text-left transition-colors disabled:pointer-events-none disabled:opacity-50",
-                mostrarSustitucion
-                  ? "border-primary bg-primary/5"
-                  : "border-border bg-card hover:bg-muted/50",
-              )}
-            >
-              <span className="text-sm font-medium text-foreground">
-                {assignState.centroCosteId
-                  ? "¿Tienes un vehículo de sustitución?"
-                  : "Selecciona antes un centro de coste"}
-              </span>
-              {mostrarSustitucion ? (
-                <CheckCircle className="size-5 shrink-0 text-primary" />
-              ) : (
-                <div className="size-5 shrink-0 rounded-full border-2 border-border" />
-              )}
-            </button>
-
-            {mostrarSustitucion && (
-              <SearchableSheetSelect<RecursoDisponible>
-                title="Selecciona vehículo de sustitución"
-                value={null}
-                onChange={(r) => asignarSustitucionMutation.mutate(r)}
-                items={vehiculosDisponibles}
-                disabled={asignarSustitucionMutation.isPending}
-                emptyMessage="No hay vehículos disponibles para asignar"
-                searchPlaceholder="Buscar por matrícula..."
-                getKey={(r) => r.id}
-                getSearchText={(r) => [r.descripcion, r.detalle].filter(Boolean).join(" ")}
-                renderTrigger={() =>
-                  sustitucionAsignada ? (
-                    <div className="flex items-center gap-2">
-                      <CheckCircle className="size-4 shrink-0 text-primary" />
-                      <span className="text-sm">
-                        <span className="font-mono font-bold tracking-widest text-foreground">
-                          {sustitucionAsignada.descripcion}
-                        </span>{" "}
-                        <span className="text-xs text-muted-foreground">(sustitución asignada)</span>
-                      </span>
-                    </div>
-                  ) : (
-                    <div className="flex items-center gap-2 text-muted-foreground">
-                      <Plus className="size-4 shrink-0" />
-                      <span className="text-sm">Añadir vehículo de sustitución</span>
-                    </div>
-                  )
-                }
-                renderItem={(r) => (
-                  <div className="flex flex-col">
-                    <span className="font-mono text-sm font-bold tracking-widest text-foreground">
-                      {r.descripcion}
-                    </span>
-                    {r.detalle && (
-                      <span className="text-xs text-muted-foreground">{r.detalle}</span>
-                    )}
-                  </div>
+          <SearchableSheetSelect<RecursoDisponible>
+            title="Selecciona vehículo de sustitución"
+            value={null}
+            onChange={(r) => asignarSustitucionMutation.mutate(r)}
+            items={vehiculosDisponibles}
+            disabled={asignarSustitucionMutation.isPending}
+            hideTrigger
+            autoOpen={sustitucionSheetOpen}
+            onAutoOpened={() => setSustitucionSheetOpen(false)}
+            emptyMessage="No hay vehículos disponibles para asignar"
+            searchPlaceholder="Buscar por matrícula..."
+            getKey={(r) => r.id}
+            getSearchText={(r) => [r.descripcion, r.detalle].filter(Boolean).join(" ")}
+            renderTrigger={() => null}
+            renderItem={(r) => (
+              <div className="flex flex-col">
+                <span className="font-mono text-sm font-bold tracking-widest text-foreground">
+                  {r.descripcion}
+                </span>
+                {r.detalle && (
+                  <span className="text-xs text-muted-foreground">{r.detalle}</span>
                 )}
-              />
+              </div>
             )}
-          </div>
+          />
         )}
 
         {/* Tarjeta */}
