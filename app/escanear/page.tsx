@@ -151,6 +151,10 @@ const CENTRO_KEY = "centro-coste";
 // vehiculo de sustitucion — id negativo para no colisionar con ids reales.
 const SUSTITUCION_SENTINEL_ID = -1;
 
+// Fila especial dentro del selector de vehiculo de sustitucion que abre el
+// formulario para dar de alta una matricula que no esta en la flota.
+const NUEVO_VEHICULO_SENTINEL_ID = -2;
+
 // ─── OCR preview → EditableLinea conversion ───────────────────────────────────
 
 function lineaToEditable(l: OcrPreviewLinea): EditableLinea {
@@ -542,6 +546,88 @@ function ImagePreviewStep({
   );
 }
 
+// ─── Alta de vehículo nuevo (vehículo de sustitución fuera de la flota) ───────
+
+function NuevoVehiculoSheet({
+  open,
+  onClose,
+  onSubmit,
+  isPending,
+}: {
+  open: boolean;
+  onClose: () => void;
+  onSubmit: (datos: { matricula: string; descripcion: string }) => void;
+  isPending: boolean;
+}) {
+  const [matricula, setMatricula] = useState("");
+  const [descripcion, setDescripcion] = useState("");
+
+  useEffect(() => {
+    if (open) {
+      setMatricula("");
+      setDescripcion("");
+      document.body.style.overflow = "hidden";
+      return () => {
+        document.body.style.overflow = "";
+      };
+    }
+  }, [open]);
+
+  if (!open) return null;
+
+  return (
+    <div role="dialog" aria-modal="true" className="fixed inset-0 z-50 flex flex-col justify-end">
+      <div className="absolute inset-0 bg-black/50 animate-in fade-in duration-200" onClick={onClose} />
+      <div className="relative flex flex-col gap-4 rounded-t-2xl bg-card p-4 pb-safe shadow-2xl animate-in slide-in-from-bottom duration-250 ease-out">
+        <div className="flex justify-center">
+          <div className="h-1 w-10 rounded-full bg-muted-foreground/30" />
+        </div>
+        <div>
+          <p className="text-base font-bold text-foreground">Añadir vehículo nuevo</p>
+          <p className="text-xs text-muted-foreground">
+            Para un vehículo que no está en la flota (alquiler, prestado...). Queda marcado para que el gestor lo revise.
+          </p>
+        </div>
+        <div className="flex flex-col gap-1.5">
+          <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+            Matrícula*
+          </p>
+          <input
+            autoFocus
+            value={matricula}
+            onChange={(e) => setMatricula(e.target.value.toUpperCase())}
+            placeholder="Ej: 1234-ABC"
+            className="h-12 rounded-xl border border-border bg-input px-4 text-sm font-mono tracking-widest text-foreground placeholder:font-sans placeholder:tracking-normal placeholder:text-muted-foreground outline-none focus:border-ring focus:ring-2 focus:ring-ring/20"
+          />
+        </div>
+        <div className="flex flex-col gap-1.5">
+          <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+            Marca / alias (opcional)
+          </p>
+          <input
+            value={descripcion}
+            onChange={(e) => setDescripcion(e.target.value)}
+            placeholder="Ej: Ford Transit, alquiler findes"
+            className="h-12 rounded-xl border border-border bg-input px-4 text-sm text-foreground placeholder:text-muted-foreground outline-none focus:border-ring focus:ring-2 focus:ring-ring/20"
+          />
+        </div>
+        <button
+          type="button"
+          disabled={!matricula.trim() || isPending}
+          onClick={() => onSubmit({ matricula: matricula.trim(), descripcion: descripcion.trim() })}
+          className="flex h-12 items-center justify-center gap-2 rounded-xl bg-primary text-sm font-bold text-primary-foreground shadow-md shadow-primary/30 transition-all disabled:pointer-events-none disabled:opacity-50"
+        >
+          {isPending ? (
+            <Loader2 className="size-4 animate-spin" />
+          ) : (
+            "Dar de alta y asignar"
+          )}
+        </button>
+      </div>
+    </div>
+  );
+}
+
 // ─── Vehicle / Centro / Tarjeta trigger + item renders ────────────────────────
 
 function SustitucionBadge() {
@@ -805,6 +891,7 @@ function AssignmentStep({
 
   const [sustitucionAsignada, setSustitucionAsignada] = useState<RecursoDisponible | null>(null);
   const [sustitucionSheetOpen, setSustitucionSheetOpen] = useState(false);
+  const [nuevoVehiculoFormOpen, setNuevoVehiculoFormOpen] = useState(false);
 
   const asignarSustitucionMutation = useMutation({
     mutationFn: (recurso: RecursoDisponible) =>
@@ -823,6 +910,37 @@ function AssignmentStep({
     onError: (err) => {
       toast.error(
         err instanceof ApiError ? err.message : "No se pudo asignar el vehículo",
+      );
+    },
+  });
+
+  // Alta de un vehiculo que no esta en la flota (p.ej. alquiler o prestado de
+  // un tercero): primero lo registra (queda pendiente de revision del gestor)
+  // y despues se autoasigna el prestamo igual que con uno ya existente.
+  const crearYAsignarVehiculoMutation = useMutation({
+    mutationFn: async (datos: { matricula: string; descripcion: string }) => {
+      const nuevo = await apiClient.post<{ id: number; matricula: string }>(
+        "/vehiculos/mios",
+        datos,
+      );
+      await apiClient.post<Prestamo>("/prestamos/mis-prestamos", {
+        tipoRecurso: "VEHICULO",
+        vehiculoId: nuevo.id,
+        centroCosteId: assignState.centroCosteId,
+        fechaInicio: new Date().toISOString().slice(0, 19),
+      });
+      return nuevo;
+    },
+    onSuccess: async (nuevo) => {
+      await Promise.all([refetchPrestamos(), refetchVehiculosTodos()]);
+      setAssignState((s) => ({ ...s, vehiculoId: nuevo.id }));
+      setSustitucionAsignada({ id: nuevo.id, descripcion: nuevo.matricula });
+      setNuevoVehiculoFormOpen(false);
+      toast.success(`Vehículo ${nuevo.matricula} dado de alta y asignado`);
+    },
+    onError: (err) => {
+      toast.error(
+        err instanceof ApiError ? err.message : "No se pudo dar de alta el vehículo",
       );
     },
   });
@@ -1056,8 +1174,17 @@ function AssignmentStep({
           <SearchableSheetSelect<RecursoDisponible>
             title="Selecciona vehículo de sustitución"
             value={null}
-            onChange={(r) => asignarSustitucionMutation.mutate(r)}
-            items={vehiculosDisponibles}
+            onChange={(r) => {
+              if (r.id === NUEVO_VEHICULO_SENTINEL_ID) {
+                setNuevoVehiculoFormOpen(true);
+                return;
+              }
+              asignarSustitucionMutation.mutate(r);
+            }}
+            items={[
+              ...vehiculosDisponibles,
+              { id: NUEVO_VEHICULO_SENTINEL_ID, descripcion: "+ Añadir vehículo nuevo" },
+            ]}
             disabled={asignarSustitucionMutation.isPending}
             hideTrigger
             autoOpen={sustitucionSheetOpen}
@@ -1065,18 +1192,42 @@ function AssignmentStep({
             emptyMessage="No hay vehículos disponibles para asignar"
             searchPlaceholder="Buscar por matrícula..."
             getKey={(r) => r.id}
-            getSearchText={(r) => [r.descripcion, r.detalle].filter(Boolean).join(" ")}
+            getSearchText={(r) =>
+              r.id === NUEVO_VEHICULO_SENTINEL_ID
+                ? "añadir vehiculo nuevo alquiler sustitucion"
+                : [r.descripcion, r.detalle].filter(Boolean).join(" ")
+            }
             renderTrigger={() => null}
-            renderItem={(r) => (
-              <div className="flex flex-col">
-                <span className="font-mono text-sm font-bold tracking-widest text-foreground">
-                  {r.descripcion}
-                </span>
-                {r.detalle && (
-                  <span className="text-xs text-muted-foreground">{r.detalle}</span>
-                )}
-              </div>
-            )}
+            renderItem={(r) =>
+              r.id === NUEVO_VEHICULO_SENTINEL_ID ? (
+                <div className="flex flex-1 items-center gap-3">
+                  <div className="flex size-9 shrink-0 items-center justify-center rounded-lg border border-dashed border-border">
+                    <Plus className="size-4 text-muted-foreground" />
+                  </div>
+                  <span className="text-sm font-medium text-foreground">
+                    Añadir vehículo nuevo (no está en la flota)
+                  </span>
+                </div>
+              ) : (
+                <div className="flex flex-col">
+                  <span className="font-mono text-sm font-bold tracking-widest text-foreground">
+                    {r.descripcion}
+                  </span>
+                  {r.detalle && (
+                    <span className="text-xs text-muted-foreground">{r.detalle}</span>
+                  )}
+                </div>
+              )
+            }
+          />
+        )}
+
+        {assignState.categoria === "VEHICULO" && (
+          <NuevoVehiculoSheet
+            open={nuevoVehiculoFormOpen}
+            onClose={() => setNuevoVehiculoFormOpen(false)}
+            onSubmit={(datos) => crearYAsignarVehiculoMutation.mutate(datos)}
+            isPending={crearYAsignarVehiculoMutation.isPending}
           />
         )}
 
