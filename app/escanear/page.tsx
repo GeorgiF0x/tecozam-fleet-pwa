@@ -3,6 +3,7 @@
 import {
   useState,
   useEffect,
+  useMemo,
   useRef,
   useCallback,
   type ChangeEvent,
@@ -69,6 +70,12 @@ interface Tarjeta {
   alias?: string | null;
   proveedor?: string;
   tienePinGuardado: boolean;
+}
+
+interface Prestamo {
+  tipoRecurso: string;
+  vehiculoId: number | null;
+  estado: string;
 }
 
 // Una foto capturada, pendiente de enviar (el ticket puede componerse de
@@ -743,13 +750,39 @@ function AssignmentStep({
   onBack: () => void;
   onContinue: () => void;
 }) {
-  const { data: vehiculos = [] } = useQuery<Vehiculo[]>({
+  const { data: vehiculosTodos = [] } = useQuery<Vehiculo[]>({
     queryKey: ["vehiculos", assignState.categoria],
     queryFn: () =>
       apiClient.get<Vehiculo[]>(
         `/vehiculos?activo=true&categoria=${assignState.categoria}`,
       ),
   });
+
+  const { data: prestamos = [] } = useQuery<Prestamo[]>({
+    queryKey: ["mis-prestamos"],
+    queryFn: () => apiClient.get<Prestamo[]>("/prestamos/mis-prestamos"),
+  });
+
+  // Solo los vehiculos con un prestamo de recurso VEHICULO activo (o vencido
+  // sin devolver) para el operario — antes se mostraba el listado completo.
+  const vehiculosAsignadosIds = useMemo(
+    () =>
+      new Set(
+        prestamos
+          .filter(
+            (p) =>
+              p.tipoRecurso === "VEHICULO" &&
+              (p.estado === "ACTIVO" || p.estado === "VENCIDO"),
+          )
+          .map((p) => p.vehiculoId),
+      ),
+    [prestamos],
+  );
+
+  const vehiculos = useMemo(
+    () => vehiculosTodos.filter((v) => vehiculosAsignadosIds.has(v.id)),
+    [vehiculosTodos, vehiculosAsignadosIds],
+  );
 
   const { data: centros = [] } = useQuery<CentroCoste[]>({
     queryKey: ["centros-coste"],
