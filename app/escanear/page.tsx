@@ -781,6 +781,8 @@ function AssignmentStep({
     enabled: assignState.categoria === "VEHICULO",
   });
 
+  const [sustitucionAsignada, setSustitucionAsignada] = useState<RecursoDisponible | null>(null);
+
   const asignarSustitucionMutation = useMutation({
     mutationFn: (recurso: RecursoDisponible) =>
       apiClient.post<Prestamo>("/prestamos/mis-prestamos", {
@@ -792,6 +794,7 @@ function AssignmentStep({
     onSuccess: async (_data, recurso) => {
       await Promise.all([refetchPrestamos(), refetchVehiculosTodos()]);
       setAssignState((s) => ({ ...s, vehiculoId: recurso.id }));
+      setSustitucionAsignada(recurso);
       toast.success(`Vehículo ${recurso.descripcion} asignado`);
     },
     onError: (err) => {
@@ -1001,16 +1004,28 @@ function AssignmentStep({
             searchPlaceholder="Buscar por matrícula..."
             getKey={(r) => r.id}
             getSearchText={(r) => [r.descripcion, r.detalle].filter(Boolean).join(" ")}
-            renderTrigger={() => (
-              <div className="flex items-center gap-2 text-muted-foreground">
-                <Plus className="size-4 shrink-0" />
-                <span className="text-sm">
-                  {assignState.centroCosteId
-                    ? "¿Vehículo de sustitución? Añádelo aquí"
-                    : "Selecciona antes un centro de coste"}
-                </span>
-              </div>
-            )}
+            renderTrigger={() =>
+              sustitucionAsignada ? (
+                <div className="flex items-center gap-2">
+                  <CheckCircle className="size-4 shrink-0 text-primary" />
+                  <span className="text-sm">
+                    <span className="font-mono font-bold tracking-widest text-foreground">
+                      {sustitucionAsignada.descripcion}
+                    </span>{" "}
+                    <span className="text-xs text-muted-foreground">(sustitución asignada)</span>
+                  </span>
+                </div>
+              ) : (
+                <div className="flex items-center gap-2 text-muted-foreground">
+                  <Plus className="size-4 shrink-0" />
+                  <span className="text-sm">
+                    {assignState.centroCosteId
+                      ? "¿Vehículo de sustitución? Añádelo aquí"
+                      : "Selecciona antes un centro de coste"}
+                  </span>
+                </div>
+              )
+            }
             renderItem={(r) => (
               <div className="flex flex-col">
                 <span className="font-mono text-sm font-bold tracking-widest text-foreground">
