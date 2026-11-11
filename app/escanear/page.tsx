@@ -880,7 +880,7 @@ function AssignmentStep({
   // Vehiculos DISPONIBLE que el operario puede auto-asignarse cuando le dan
   // uno de sustitucion y no aparece en su lista de prestamos activos. Queda
   // marcado como creadoPorCampo=true para que el gestor lo revise despues.
-  const { data: vehiculosDisponibles = [] } = useQuery<RecursoDisponible[]>({
+  const { data: vehiculosDisponibles = [], refetch: refetchVehiculosDisponibles } = useQuery<RecursoDisponible[]>({
     queryKey: ["recursos-disponibles", "VEHICULO"],
     queryFn: () =>
       apiClient.get<RecursoDisponible[]>(
@@ -902,7 +902,11 @@ function AssignmentStep({
         fechaInicio: new Date().toISOString().slice(0, 19),
       }),
     onSuccess: async (_data, recurso) => {
-      await Promise.all([refetchPrestamos(), refetchVehiculosTodos()]);
+      await Promise.all([
+        refetchPrestamos(),
+        refetchVehiculosTodos(),
+        refetchVehiculosDisponibles(),
+      ]);
       setAssignState((s) => ({ ...s, vehiculoId: recurso.id }));
       setSustitucionAsignada(recurso);
       toast.success(`Vehículo ${recurso.descripcion} asignado`);
@@ -932,7 +936,11 @@ function AssignmentStep({
       return nuevo;
     },
     onSuccess: async (nuevo) => {
-      await Promise.all([refetchPrestamos(), refetchVehiculosTodos()]);
+      await Promise.all([
+        refetchPrestamos(),
+        refetchVehiculosTodos(),
+        refetchVehiculosDisponibles(),
+      ]);
       setAssignState((s) => ({ ...s, vehiculoId: nuevo.id }));
       setSustitucionAsignada({ id: nuevo.id, descripcion: nuevo.matricula });
       setNuevoVehiculoFormOpen(false);
