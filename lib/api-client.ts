@@ -170,11 +170,13 @@ async function refreshAccessToken(): Promise<string> {
 
 // ── Core fetch ────────────────────────────────────────────────────────────────
 
-async function request<T>(
+// Fetch con auth + refresh automatico, sin asumir el formato de la respuesta
+// (request() la parsea como JSON; getBlob() la usa tal cual para binarios).
+async function fetchWithAuth(
   path: string,
   init: RequestInit,
   retry = true,
-): Promise<T> {
+): Promise<Response> {
   const url = `${BASE_URL}${normalisePath(path)}`;
   const accessToken = tokens.access;
 
@@ -203,11 +205,21 @@ async function request<T>(
     try {
       const newToken = await refreshAccessToken();
       headers.set("Authorization", `Bearer ${newToken}`);
-      return request<T>(path, { ...init, headers }, false);
+      return fetchWithAuth(path, { ...init, headers }, false);
     } catch {
       return redirectToLogin();
     }
   }
+
+  return res;
+}
+
+async function request<T>(
+  path: string,
+  init: RequestInit,
+  retry = true,
+): Promise<T> {
+  const res = await fetchWithAuth(path, init, retry);
 
   if (!res.ok) {
     let message = `HTTP ${res.status}`;
@@ -262,5 +274,12 @@ export const apiClient = {
   upload<T>(path: string, formData: FormData): Promise<T> {
     // Do NOT set Content-Type — browser must set the boundary automatically.
     return request<T>(path, { method: "POST", body: formData });
+  },
+
+  /** Para binarios (p.ej. fotos de ticket): mismo auth/refresh, sin parsear como JSON. */
+  async getBlob(path: string): Promise<Blob> {
+    const res = await fetchWithAuth(path, { method: "GET" });
+    if (!res.ok) throw new ApiError(res.status, `HTTP ${res.status}`);
+    return res.blob();
   },
 };

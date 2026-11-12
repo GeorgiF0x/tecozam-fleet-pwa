@@ -50,6 +50,11 @@ type Step =
 
 type Categoria = "VEHICULO" | "INDUSTRIAL_MAQUINARIA";
 
+// Tipo de gasto del ticket — elegido por el operario, no se detecta por OCR.
+// Un peaje no tiene litros/precio-litro, de ahí que LineaOcrCard oculte esos
+// campos cuando vale "PEAJE".
+type TipoGasto = "COMBUSTIBLE" | "PEAJE";
+
 interface Vehiculo {
   id: number;
   nombre?: string;
@@ -1381,10 +1386,12 @@ function OcrField({
 function LineaOcrCard({
   index,
   linea,
+  esPeaje,
   onChange,
 }: {
   index: number;
   linea: EditableLinea;
+  esPeaje: boolean;
   onChange: (field: keyof EditableLinea, value: string) => void;
 }) {
   return (
@@ -1423,23 +1430,27 @@ function LineaOcrCard({
         suffix="€"
       />
 
-      <OcrField
-        label="Litros"
-        value={linea.litros}
-        onChange={(v) => onChange("litros", v)}
-        type="number"
-        placeholder="—"
-        suffix="L"
-      />
+      {!esPeaje && (
+        <>
+          <OcrField
+            label="Litros"
+            value={linea.litros}
+            onChange={(v) => onChange("litros", v)}
+            type="number"
+            placeholder="—"
+            suffix="L"
+          />
 
-      <OcrField
-        label="Precio / L"
-        value={linea.precioLitro}
-        onChange={(v) => onChange("precioLitro", v)}
-        type="number"
-        placeholder="—"
-        suffix="€/L"
-      />
+          <OcrField
+            label="Precio / L"
+            value={linea.precioLitro}
+            onChange={(v) => onChange("precioLitro", v)}
+            type="number"
+            placeholder="—"
+            suffix="€/L"
+          />
+        </>
+      )}
 
       <OcrField
         label="Producto"
@@ -1487,6 +1498,7 @@ function OcrAndEditStep({
   const [subState, setSubState] = useState<OcrSubState>("loading");
   const [lineas, setLineas] = useState<EditableLinea[]>([]);
   const [submitError, setSubmitError] = useState<string | null>(null);
+  const [tipoGasto, setTipoGasto] = useState<TipoGasto>("COMBUSTIBLE");
 
   // OCR preview mutation — fires on mount (FLEET-01: ya no envia PIN)
   const ocrPreviewMutation = useMutation<OcrPreviewResponse, Error, void>({
@@ -1523,10 +1535,12 @@ function OcrAndEditStep({
         formData.append("imagenes", img.blob, "ticket.jpg"),
       );
 
+      const esPeaje = tipoGasto === "PEAJE";
       const params: Record<string, unknown> = {
         tarjetaId: tarjeta.id,
         categoriaRecurso: assignState.categoria,
         vehiculoId: assignState.vehiculoId,
+        tipoGasto,
         lineas: lineas.map((l) => ({
           fotoIndice: l.fotoIndice,
           estacion: l.estacion || undefined,
@@ -1535,8 +1549,8 @@ function OcrAndEditStep({
           numRecibo: l.numRecibo || undefined,
           matricula: l.matricula || undefined,
           kms: l.kms ? Number(l.kms) : undefined,
-          litros: l.litros ? Number(l.litros) : undefined,
-          precioLitro: l.precioLitro ? Number(l.precioLitro) : undefined,
+          litros: esPeaje ? undefined : l.litros ? Number(l.litros) : undefined,
+          precioLitro: esPeaje ? undefined : l.precioLitro ? Number(l.precioLitro) : undefined,
           importeTotal: l.importeTotal ? Number(l.importeTotal) : undefined,
         })),
       };
@@ -1640,15 +1654,42 @@ function OcrAndEditStep({
   return (
     <div className="flex flex-1 flex-col overflow-y-auto">
       <div className="flex flex-col gap-5 px-4 py-4">
-        <p className="text-xs font-semibold text-muted-foreground">
-          Datos extraídos por IA · revisa y edita si es necesario
-        </p>
+        <div className="flex flex-col gap-2">
+          <p className="text-xs font-semibold text-muted-foreground">
+            Tipo de gasto
+          </p>
+          <div className="flex gap-2 rounded-xl border border-border bg-muted p-1">
+            {(["COMBUSTIBLE", "PEAJE"] as TipoGasto[]).map((opcion) => (
+              <button
+                key={opcion}
+                type="button"
+                onClick={() => setTipoGasto(opcion)}
+                className={cn(
+                  "flex h-10 flex-1 items-center justify-center rounded-lg text-sm font-semibold transition-colors",
+                  tipoGasto === opcion
+                    ? "bg-primary text-primary-foreground shadow-sm"
+                    : "text-muted-foreground hover:bg-background/60",
+                )}
+              >
+                {opcion === "COMBUSTIBLE" ? "Combustible" : "Peaje"}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        <div className="flex items-start gap-2 rounded-xl border border-warning/30 bg-warning/10 px-3 py-2.5">
+          <Sparkles className="mt-0.5 size-4 shrink-0 text-warning" />
+          <p className="text-sm font-semibold text-warning">
+            Datos extraídos por IA · revisa y edita si es necesario
+          </p>
+        </div>
 
         {lineas.map((linea, idx) => (
           <LineaOcrCard
             key={idx}
             index={idx}
             linea={linea}
+            esPeaje={tipoGasto === "PEAJE"}
             onChange={(field, value) => setLineaField(idx, field, value)}
           />
         ))}
