@@ -28,6 +28,9 @@ import {
   Sparkles,
   Plus,
   X,
+  Fuel,
+  Milestone,
+  AlertTriangle,
 } from "lucide-react";
 import { toast } from "sonner";
 import { SearchableSheetSelect } from "@/components/shared/searchable-sheet-select";
@@ -1348,7 +1351,7 @@ function OcrField({
   label: string;
   value: string;
   onChange: (v: string) => void;
-  type?: "text" | "number";
+  type?: "text" | "number" | "datetime-local";
   placeholder?: string;
   suffix?: string;
   required?: boolean;
@@ -1362,7 +1365,7 @@ function OcrField({
       <div className="relative">
         <input
           type={type}
-          inputMode={type === "number" ? "decimal" : "text"}
+          inputMode={type === "number" ? "decimal" : undefined}
           value={value}
           onChange={(e) => onChange(e.target.value)}
           placeholder={placeholder}
@@ -1416,8 +1419,7 @@ function LineaOcrCard({
         label="Fecha y hora"
         value={linea.fechaHora}
         onChange={(v) => onChange("fechaHora", v)}
-        type="text"
-        placeholder="2026-01-29T10:05:00"
+        type="datetime-local"
       />
 
       <OcrField
@@ -1431,7 +1433,7 @@ function LineaOcrCard({
       />
 
       {!esPeaje && (
-        <>
+        <div className="grid grid-cols-2 gap-3">
           <OcrField
             label="Litros"
             value={linea.litros}
@@ -1449,7 +1451,7 @@ function LineaOcrCard({
             placeholder="—"
             suffix="€/L"
           />
-        </>
+        </div>
       )}
 
       <OcrField
@@ -1459,19 +1461,21 @@ function LineaOcrCard({
         placeholder="Diésel, Gasolina 95..."
       />
 
-      <OcrField
-        label="Nº recibo"
-        value={linea.numRecibo}
-        onChange={(v) => onChange("numRecibo", v)}
-        placeholder="—"
-      />
+      <div className="grid grid-cols-2 gap-3">
+        <OcrField
+          label="Nº recibo"
+          value={linea.numRecibo}
+          onChange={(v) => onChange("numRecibo", v)}
+          placeholder="—"
+        />
 
-      <OcrField
-        label="Matrícula detectada"
-        value={linea.matricula}
-        onChange={(v) => onChange("matricula", v)}
-        placeholder="—"
-      />
+        <OcrField
+          label="Matrícula detectada"
+          value={linea.matricula}
+          onChange={(v) => onChange("matricula", v)}
+          placeholder="—"
+        />
+      </div>
     </div>
   );
 }
@@ -1599,6 +1603,23 @@ function OcrAndEditStep({
     lineas.length > 0 &&
     lineas.every((l) => l.estacion.trim() !== "" && l.importeTotal.trim() !== "");
 
+  // Aviso (no automatico, el operario sigue eligiendo) cuando el texto que la
+  // IA detecto no encaja con el tipo de gasto seleccionado — p.ej. estacion
+  // "PEAJE BENAVENTE SUR" con "Combustible" marcado por ser el valor inicial.
+  const textoDetectado = lineas
+    .map((l) => `${l.estacion} ${l.producto}`)
+    .join(" ")
+    .toLowerCase();
+  const pareceSerPeaje = /peaje|autopista|autov[ií]a|telepeaje|\bap-\d/.test(
+    textoDetectado,
+  );
+  const pareceCombustible = /di[eé]sel|gasol|gas[oó]leo|combustible/.test(
+    textoDetectado,
+  );
+  const tipoNoCoincide =
+    (tipoGasto === "COMBUSTIBLE" && pareceSerPeaje && !pareceCombustible) ||
+    (tipoGasto === "PEAJE" && pareceCombustible && !pareceSerPeaje);
+
   // ── Loading sub-state ──────────────────────────────────────────────────────
   if (subState === "loading") {
     return (
@@ -1665,16 +1686,32 @@ function OcrAndEditStep({
                 type="button"
                 onClick={() => setTipoGasto(opcion)}
                 className={cn(
-                  "flex h-10 flex-1 items-center justify-center rounded-lg text-sm font-semibold transition-colors",
+                  "flex h-10 flex-1 items-center justify-center gap-1.5 rounded-lg text-sm font-semibold transition-colors",
                   tipoGasto === opcion
                     ? "bg-primary text-primary-foreground shadow-sm"
                     : "text-muted-foreground hover:bg-background/60",
                 )}
               >
+                {opcion === "COMBUSTIBLE" ? (
+                  <Fuel className="size-4" />
+                ) : (
+                  <Milestone className="size-4" />
+                )}
                 {opcion === "COMBUSTIBLE" ? "Combustible" : "Peaje"}
               </button>
             ))}
           </div>
+          {tipoNoCoincide && (
+            <div className="flex items-start gap-2 rounded-xl border border-warning/40 bg-warning/10 px-3 py-2.5">
+              <AlertTriangle className="mt-0.5 size-4 shrink-0 text-warning" />
+              <p className="text-sm text-warning">
+                Los datos detectados parecen de{" "}
+                {pareceSerPeaje ? "un peaje" : "combustible"}, pero tienes
+                seleccionado "{tipoGasto === "PEAJE" ? "Peaje" : "Combustible"}
+                ". Revisa el tipo de gasto antes de enviar.
+              </p>
+            </div>
+          )}
         </div>
 
         <div className="flex items-start gap-2 rounded-xl border border-warning/30 bg-warning/10 px-3 py-2.5">
