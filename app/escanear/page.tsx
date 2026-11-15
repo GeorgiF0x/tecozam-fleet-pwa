@@ -78,6 +78,7 @@ interface Tarjeta {
   alias?: string | null;
   proveedor?: string;
   tienePinGuardado: boolean;
+  vehiculoId?: number | null;
 }
 
 interface Prestamo {
@@ -961,27 +962,6 @@ function AssignmentStep({
     },
   });
 
-  // Solo los vehiculos con un prestamo de recurso VEHICULO activo (o vencido
-  // sin devolver) para el operario — antes se mostraba el listado completo.
-  const vehiculosAsignadosIds = useMemo(
-    () =>
-      new Set(
-        prestamos
-          .filter(
-            (p) =>
-              p.tipoRecurso === "VEHICULO" &&
-              (p.estado === "ACTIVO" || p.estado === "VENCIDO"),
-          )
-          .map((p) => p.vehiculoId),
-      ),
-    [prestamos],
-  );
-
-  const vehiculos = useMemo(
-    () => vehiculosTodos.filter((v) => vehiculosAsignadosIds.has(v.id)),
-    [vehiculosTodos, vehiculosAsignadosIds],
-  );
-
   const { data: centros = [] } = useQuery<CentroCoste[]>({
     queryKey: ["centros-coste"],
     queryFn: () => apiClient.get<CentroCoste[]>("/centros-coste?activo=true"),
@@ -991,6 +971,32 @@ function AssignmentStep({
     queryKey: ["mis-tarjetas"],
     queryFn: () => apiClient.get<Tarjeta[]>("/tarjetas/mis-tarjetas"),
   });
+
+  // Vehiculo asignado al operario: la fuente real es la tarjeta de combustible
+  // que tiene asignada (TarjetaAsignacion.vehiculo, rellenado por el gestor al
+  // asignar la tarjeta en Admin Web) — no un prestamo, que solo existe para
+  // los vehiculos de sustitucion autoasignados desde esta misma pantalla.
+  const vehiculosAsignadosIds = useMemo(
+    () =>
+      new Set([
+        ...tarjetas
+          .filter((t) => t.vehiculoId != null)
+          .map((t) => t.vehiculoId as number),
+        ...prestamos
+          .filter(
+            (p) =>
+              p.tipoRecurso === "VEHICULO" &&
+              (p.estado === "ACTIVO" || p.estado === "VENCIDO"),
+          )
+          .map((p) => p.vehiculoId),
+      ]),
+    [tarjetas, prestamos],
+  );
+
+  const vehiculos = useMemo(
+    () => vehiculosTodos.filter((v) => vehiculosAsignadosIds.has(v.id)),
+    [vehiculosTodos, vehiculosAsignadosIds],
+  );
 
   // Preload last-used from localStorage
   useEffect(() => {
