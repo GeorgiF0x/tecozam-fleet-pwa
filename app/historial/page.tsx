@@ -13,6 +13,7 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 import { MobileShell } from "@/components/layout/mobile-shell";
+import { useAuth } from "@/providers/auth-provider";
 import { apiClient, ApiError } from "@/lib/api-client";
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
@@ -139,6 +140,7 @@ const FILTERS: { key: Filter; label: string }[] = [
 // ─── Page ─────────────────────────────────────────────────────────────────────
 
 export default function HistorialPage() {
+  const { user } = useAuth();
   const [filter, setFilter] = useState<Filter>("todos");
   const [expandedId, setExpandedId] = useState<number | null>(null);
   const [editingId, setEditingId] = useState<number | null>(null);
@@ -286,7 +288,8 @@ export default function HistorialPage() {
             const importe = t.importeTotal ?? t.importe;
             const expandido = expandedId === t.id;
             const editando = editingId === t.id;
-            const puedeEditar = estado === "pendiente";
+            const esPendiente = estado === "pendiente";
+            const puedeEditar = esPendiente && !!user?.puedeEditarTickets;
             const fotos = (t.lineas ?? []).map((l) => l.fotoUrl).filter((u): u is string => !!u);
 
             return (
@@ -370,7 +373,7 @@ export default function HistorialPage() {
                         </button>
                       </div>
                     )}
-                    {!puedeEditar && (
+                    {!esPendiente && (
                       <p className="text-[11px] text-muted-foreground">
                         Ya no se puede editar: el ticket está en estado &quot;{estadoLabel(estado)}&quot;.
                       </p>

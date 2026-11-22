@@ -19,6 +19,7 @@ export interface AuthUser {
   rol: string;
   trabajadorId?: number;
   trabajadorNombre?: string;
+  puedeEditarTickets: boolean;
 }
 
 interface AuthContextValue {
@@ -63,6 +64,7 @@ interface MeResponse {
     nombreCompleto?: string;
   };
   nombre?: string;
+  puedeEditarTickets?: boolean;
 }
 
 // ─── Context ──────────────────────────────────────────────────────────────────
@@ -102,6 +104,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         rol: me.rol,
         trabajadorId: me.trabajadorId ?? me.trabajador?.id,
         trabajadorNombre,
+        puedeEditarTickets: me.puedeEditarTickets ?? false,
       });
     } catch {
       tokens.clear();
@@ -161,6 +164,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         rol: me.rol,
         trabajadorId: me.trabajadorId ?? me.trabajador?.id,
         trabajadorNombre,
+        puedeEditarTickets: me.puedeEditarTickets ?? false,
       });
 
       router.replace("/");
