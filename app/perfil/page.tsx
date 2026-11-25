@@ -1,13 +1,26 @@
 "use client";
 
 import { LogOut } from "lucide-react";
+import { useQuery } from "@tanstack/react-query";
 import { MobileShell } from "@/components/layout/mobile-shell";
 import { useAuth } from "@/providers/auth-provider";
-
-const VERSION = "1.0.0";
+import { apiClient } from "@/lib/api-client";
+import { APP_VERSION } from "@/lib/version";
 
 export default function PerfilPage() {
   const { user, logout } = useAuth();
+
+  // El backend se despliega a mano y la app desde el fork del cliente: se
+  // muestran las dos versiones. Un servidor anterior a 1.0.20 no tiene
+  // /api/version y responde con error.
+  const { data: versionServidor, isPending: cargandoVersion } = useQuery({
+    queryKey: ["version-servidor"],
+    queryFn: () => apiClient.get<{ version: string }>("/version"),
+    staleTime: 5 * 60_000,
+    retry: false,
+  });
+  const servidor = versionServidor?.version ?? "anterior a 1.0.20";
+  const versionesDistintas = !cargandoVersion && servidor !== APP_VERSION;
 
   const initials = user?.trabajadorNombre
     ? user.trabajadorNombre
@@ -57,9 +70,17 @@ export default function PerfilPage() {
         </button>
 
         {/* ── Version ─────────────────────────────────────────── */}
-        <p className="text-center text-xs text-muted-foreground/50">
-          Tecozam Operarios PWA v{VERSION}
+        <p
+          className={`text-center text-xs tabular-nums ${versionesDistintas ? "text-amber-600 dark:text-amber-400" : "text-muted-foreground/50"}`}
+        >
+          App {APP_VERSION}
+          {!cargandoVersion && ` · Servidor ${servidor}`}
         </p>
+        {versionesDistintas && (
+          <p className="-mt-3 text-center text-xs text-amber-600 dark:text-amber-400">
+            La app y el servidor tienen versiones distintas: avisa al responsable.
+          </p>
+        )}
       </div>
     </MobileShell>
   );
