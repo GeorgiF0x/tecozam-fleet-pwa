@@ -35,6 +35,8 @@ interface SearchableSheetSelectProps<T> {
   autoOpen?: boolean;
   /** Called right after an `autoOpen` has opened the sheet, so the caller can reset its flag */
   onAutoOpened?: () => void;
+  /** Replaces the default substring filter; receives the raw query (also when empty) */
+  filterItems?: (items: T[], query: string) => T[];
 }
 
 // ─── Component ────────────────────────────────────────────────────────────────
@@ -58,6 +60,7 @@ export function SearchableSheetSelect<T>({
   hideTrigger = false,
   autoOpen = false,
   onAutoOpened,
+  filterItems,
 }: SearchableSheetSelectProps<T>) {
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
@@ -75,8 +78,9 @@ export function SearchableSheetSelect<T>({
 
   // ── Filtered items ─────────────────────────────────────────────────────────
 
-  const filtered =
-    query.trim() === ""
+  const filtered = filterItems
+    ? filterItems(items, query)
+    : query.trim() === ""
       ? items
       : items.filter((item) =>
           getSearchText(item).toLowerCase().includes(query.toLowerCase()),

@@ -41,6 +41,7 @@ import {
   getRecentItems,
 } from "@/lib/recent-storage";
 import { cn } from "@/lib/utils";
+import { buscarPorMatricula, normalizarMatricula } from "@/lib/sustitucion";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -92,6 +93,10 @@ interface RecursoDisponible {
   descripcion: string;
   detalle?: string | null;
 }
+
+// Fila del selector de sustitución; `matriculaNueva` viaja en la fila de alta
+// para rellenar el formulario con lo que el operario ya ha tecleado.
+type SustitucionItem = RecursoDisponible & { matriculaNueva?: string };
 
 // Una foto capturada, pendiente de enviar (el ticket puede componerse de
 // varias fotos — p.ej. tickets largos partidos en 2+ fotos).
@@ -570,12 +575,14 @@ function NuevoVehiculoSheet({
   onClose,
   onSubmit,
   isPending,
+  valorInicial = "",
 }: {
   open: boolean;
   categoria: Categoria;
   onClose: () => void;
   onSubmit: (datos: { valor: string; descripcion: string }) => void;
   isPending: boolean;
+  valorInicial?: string;
 }) {
   const [valor, setValor] = useState("");
   const [descripcion, setDescripcion] = useState("");
@@ -583,14 +590,14 @@ function NuevoVehiculoSheet({
 
   useEffect(() => {
     if (open) {
-      setValor("");
+      setValor(valorInicial);
       setDescripcion("");
       document.body.style.overflow = "hidden";
       return () => {
         document.body.style.overflow = "";
       };
     }
-  }, [open]);
+  }, [open, valorInicial]);
 
   if (!open) return null;
 
@@ -900,9 +907,10 @@ function AssignmentStep({
     queryFn: () => apiClient.get<Prestamo[]>("/prestamos/mis-prestamos"),
   });
 
-  // Vehiculos DISPONIBLE que el operario puede auto-asignarse cuando le dan
-  // uno de sustitucion y no aparece en su lista de prestamos activos. Queda
-  // marcado como creadoPorCampo=true para que el gestor lo revise despues.
+  // Vehiculos DISPONIBLE. No se listan en el selector de sustitucion (el
+  // cliente no quiere ver la flota ahi, incidencia 19/11 n.3): solo sirven
+  // para reconocer una matricula tecleada que ya existe, porque el alta en
+  // /vehiculos/mios la rechazaria por duplicada.
   const { data: vehiculosDisponibles = [], refetch: refetchVehiculosDisponibles } = useQuery<RecursoDisponible[]>({
     queryKey: ["recursos-disponibles", "VEHICULO"],
     queryFn: () =>
@@ -915,6 +923,7 @@ function AssignmentStep({
   const [sustitucionAsignada, setSustitucionAsignada] = useState<RecursoDisponible | null>(null);
   const [sustitucionSheetOpen, setSustitucionSheetOpen] = useState(false);
   const [nuevoVehiculoFormOpen, setNuevoVehiculoFormOpen] = useState(false);
+  const [valorInicialNuevo, setValorInicialNuevo] = useState("");
 
   const asignarSustitucionMutation = useMutation({
     mutationFn: (recurso: RecursoDisponible) =>
@@ -1148,6 +1157,7 @@ function AssignmentStep({
                 toast.error("Selecciona antes un centro de coste");
                 return;
               }
+              setValorInicialNuevo("");
               setNuevoVehiculoFormOpen(true);
               return;
             }
@@ -1257,32 +1267,33 @@ function AssignmentStep({
         {/* Vehículo de sustitución — sin fila propia, se abre desde la fila
             especial del listado de "Vehículo" de arriba */}
         {assignState.categoria === "VEHICULO" && (
-          <SearchableSheetSelect<RecursoDisponible>
-            title="Selecciona vehículo de sustitución"
+          <SearchableSheetSelect<SustitucionItem>
+            title="Escribe la matrícula del vehículo de sustitución"
             value={null}
             onChange={(r) => {
               if (r.id === NUEVO_VEHICULO_SENTINEL_ID) {
+                setValorInicialNuevo(r.matriculaNueva ?? "");
                 setNuevoVehiculoFormOpen(true);
                 return;
               }
               asignarSustitucionMutation.mutate(r);
             }}
-            items={[
-              ...vehiculosDisponibles,
-              { id: NUEVO_VEHICULO_SENTINEL_ID, descripcion: "+ Añadir vehículo nuevo" },
-            ]}
+            items={vehiculosDisponibles}
+            // Nunca se lista la flota: solo la fila de alta o, si la matricula
+            // tecleada ya existe, ese vehiculo para reutilizarlo.
+            filterItems={(items, query) => {
+              const existente = buscarPorMatricula(items, query);
+              if (existente) return [existente];
+              const matricula = normalizarMatricula(query) ? query.trim().toUpperCase() : "";
+              return [{ id: NUEVO_VEHICULO_SENTINEL_ID, descripcion: matricula, matriculaNueva: matricula }];
+            }}
             disabled={asignarSustitucionMutation.isPending}
             hideTrigger
             autoOpen={sustitucionSheetOpen}
             onAutoOpened={() => setSustitucionSheetOpen(false)}
-            emptyMessage="No hay vehículos disponibles para asignar"
-            searchPlaceholder="Buscar por matrícula..."
+            searchPlaceholder="Matrícula, p. ej. 1234-ABC"
             getKey={(r) => r.id}
-            getSearchText={(r) =>
-              r.id === NUEVO_VEHICULO_SENTINEL_ID
-                ? "añadir vehiculo nuevo alquiler sustitucion"
-                : [r.descripcion, r.detalle].filter(Boolean).join(" ")
-            }
+            getSearchText={(r) => r.descripcion}
             renderTrigger={() => null}
             renderItem={(r) =>
               r.id === NUEVO_VEHICULO_SENTINEL_ID ? (
@@ -1291,7 +1302,14 @@ function AssignmentStep({
                     <Plus className="size-4 text-muted-foreground" />
                   </div>
                   <span className="text-sm font-medium text-foreground">
-                    Añadir vehículo nuevo (no está en la flota)
+                    {r.matriculaNueva ? (
+                      <>
+                        Dar de alta{" "}
+                        <span className="font-mono font-bold tracking-widest">{r.matriculaNueva}</span>
+                      </>
+                    ) : (
+                      "Añadir vehículo de sustitución"
+                    )}
                   </span>
                 </div>
               ) : (
@@ -1314,6 +1332,7 @@ function AssignmentStep({
           onClose={() => setNuevoVehiculoFormOpen(false)}
           onSubmit={(datos) => crearYAsignarVehiculoMutation.mutate(datos)}
           isPending={crearYAsignarVehiculoMutation.isPending}
+          valorInicial={valorInicialNuevo}
         />
 
         {/* Tarjeta */}
